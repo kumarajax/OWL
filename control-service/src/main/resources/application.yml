@@ -1,0 +1,6 @@
+server:
+  port: 8090
+owl:
+  storage:
+    replication-factor: 3
+

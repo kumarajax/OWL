@@ -1,0 +1,167 @@
+package com.owldrive.api;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.Collection;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+@Service
+public class ProvisioningService {
+    private static final long DEFAULT_USER_QUOTA_BYTES = 2L * 1024 * 1024 * 1024;
+
+    private final JdbcTemplate jdbc;
+
+    public ProvisioningService(JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    @Transactional
+    public UserRecord ensureUser(Jwt jwt) {
+        String keycloakId = jwt.getSubject();
+        String username = claim(jwt, "preferred_username", keycloakId);
+        String email = requiredEmail(jwt);
+        String role = resolveRole(jwt);
+        Long quotaBytes = "ADMIN".equals(role) ? null : DEFAULT_USER_QUOTA_BYTES;
+
+        Optional<UserRecord> existing = findUserByKeycloakId(keycloakId);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+
+        Optional<UserRecord> existingByEmail = findSingleUserByVerifiedEmail(jwt, email);
+        if (existingByEmail.isPresent()) {
+            return existingByEmail.get();
+        }
+
+        UserRecord user = jdbc.queryForObject(
+                """
+                INSERT INTO users (keycloak_id, email, username, role, quota_bytes, used_bytes)
+                VALUES (?, ?, ?, ?, ?, 0)
+                RETURNING id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at
+                """,
+                this::mapUser,
+                keycloakId,
+                email,
+                username,
+                role,
+                quotaBytes);
+        ensureRootFolder(user);
+        return user;
+    }
+
+    @Transactional
+    public FolderRecord ensureRootFolder(UserRecord user) {
+        Optional<FolderRecord> existing = findRootFolder(user.id());
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        return jdbc.queryForObject(
+                """
+                INSERT INTO folders (name, owner_id, parent_id)
+                VALUES ('My Drive', ?, NULL)
+                RETURNING id, name, owner_id, parent_id, created_at, updated_at, deleted_at
+                """,
+                this::mapFolder,
+                user.id());
+    }
+
+    private Optional<UserRecord> findUserByKeycloakId(String keycloakId) {
+        return jdbc.query(
+                """
+                SELECT id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at
+                FROM users
+                WHERE keycloak_id = ?
+                """,
+                this::mapUser,
+                keycloakId).stream().findFirst();
+    }
+
+    private Optional<UserRecord> findSingleUserByVerifiedEmail(Jwt jwt, String email) {
+        Boolean emailVerified = jwt.getClaimAsString("email_verified") == null
+                ? jwt.getClaim("email_verified")
+                : Boolean.valueOf(jwt.getClaimAsString("email_verified"));
+        if (!Boolean.TRUE.equals(emailVerified)) {
+            return Optional.empty();
+        }
+        var matches = jdbc.query(
+                """
+                SELECT id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at
+                FROM users
+                WHERE lower(email) = lower(?)
+                """,
+                this::mapUser,
+                email);
+        return matches.size() == 1 ? Optional.of(matches.get(0)) : Optional.empty();
+    }
+
+    private Optional<FolderRecord> findRootFolder(UUID ownerId) {
+        return jdbc.query(
+                """
+                SELECT id, name, owner_id, parent_id, created_at, updated_at, deleted_at
+                FROM folders
+                WHERE owner_id = ? AND parent_id IS NULL AND deleted_at IS NULL
+                """,
+                this::mapFolder,
+                ownerId).stream().findFirst();
+    }
+
+    private String claim(Jwt jwt, String name, String fallback) {
+        String value = jwt.getClaimAsString(name);
+        return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private String requiredEmail(Jwt jwt) {
+        String email = jwt.getClaimAsString("email");
+        if (email == null || email.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email is required");
+        }
+        return email;
+    }
+
+    private String resolveRole(Jwt jwt) {
+        Object realmAccess = jwt.getClaims().get("realm_access");
+        if (realmAccess instanceof Map<?, ?> access) {
+            Object roles = access.get("roles");
+            if (roles instanceof Collection<?> values) {
+                boolean admin = values.stream()
+                        .map(String::valueOf)
+                        .anyMatch(role -> role.equalsIgnoreCase("admin"));
+                if (admin) {
+                    return "ADMIN";
+                }
+            }
+        }
+        return "USER";
+    }
+
+    private UserRecord mapUser(ResultSet rs, int rowNum) throws SQLException {
+        return new UserRecord(
+                rs.getObject("id", UUID.class),
+                rs.getString("keycloak_id"),
+                rs.getString("email"),
+                rs.getString("username"),
+                rs.getString("role"),
+                rs.getObject("quota_bytes", Long.class),
+                rs.getLong("used_bytes"),
+                rs.getObject("created_at", java.time.OffsetDateTime.class));
+    }
+
+    private FolderRecord mapFolder(ResultSet rs, int rowNum) throws SQLException {
+        return new FolderRecord(
+                rs.getObject("id", UUID.class),
+                rs.getString("name"),
+                rs.getObject("owner_id", UUID.class),
+                rs.getObject("parent_id", UUID.class),
+                rs.getObject("created_at", java.time.OffsetDateTime.class),
+                rs.getObject("updated_at", java.time.OffsetDateTime.class),
+                rs.getObject("deleted_at", java.time.OffsetDateTime.class));
+    }
+}

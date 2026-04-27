@@ -1,0 +1,30 @@
+# OS
+.DS_Store
+
+# Node / Frontend
+node_modules/
+.next/
+dist/
+
+# Java / Backend
+target/
+*.class
+
+# Python / AI service
+__pycache__/
+.venv/
+
+# Logs
+*.log
+
+# Environment / secrets (VERY IMPORTANT)
+.env
+.env.local
+
+# Data / storage (VERY IMPORTANT)
+data/
+storage/
+
+# IDE
+.vscode/
+.idea/

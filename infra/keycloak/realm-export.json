@@ -1,0 +1,78 @@
+{
+  "realm": "owldrive",
+  "enabled": true,
+  "accessTokenLifespan": 300,
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "verifyEmail": false,
+  "roles": {
+    "realm": [
+      {
+        "name": "admin",
+        "description": "OWL Drive administrator"
+      },
+      {
+        "name": "user",
+        "description": "OWL Drive regular user"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "owl-drive-web",
+      "name": "OWL Drive Web",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": [
+        "http://localhost:3000/*"
+      ],
+      "webOrigins": [
+        "http://localhost:3000"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3000/*"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "testuser",
+      "enabled": true,
+      "email": "kumarajax@gmail.com",
+      "emailVerified": true,
+      "firstName": "Test",
+      "lastName": "User",
+      "realmRoles": [
+        "user"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "TestPassword123!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "adminuser",
+      "enabled": true,
+      "email": "kumarajax@gmail.com",
+      "emailVerified": true,
+      "firstName": "Admin",
+      "lastName": "User",
+      "realmRoles": [
+        "admin"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "AdminPassword123!",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

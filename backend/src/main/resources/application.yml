@@ -1,0 +1,30 @@
+server:
+  port: 8081
+
+spring:
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 25MB
+  datasource:
+    url: jdbc:postgresql://localhost:5432/owldrive?currentSchema=app
+    username: owldrive
+    password: owldrive_dev_password
+  flyway:
+    enabled: true
+    schemas: app
+    create-schemas: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8080/realms/owldrive
+
+app:
+  cors:
+    allowed-origins: http://localhost:3000
+  storage:
+    local:
+      root: ./data/storage
+    max-upload-bytes: 26214400
+    reject-empty-files: true

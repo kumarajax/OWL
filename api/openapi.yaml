@@ -1,0 +1,271 @@
+openapi: 3.1.0
+info:
+  title: OWL Drive Phase 1.1 API
+  version: 0.3.1
+servers:
+  - url: http://localhost:8081
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    User:
+      type: object
+      required: [id, keycloakId, email, username, role, quotaBytes, usedBytes, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        keycloakId: { type: string }
+        email: { type: string, format: email }
+        username: { type: string }
+        role: { type: string, enum: [ADMIN, USER] }
+        quotaBytes: { type: integer, format: int64, nullable: true }
+        usedBytes: { type: integer, format: int64 }
+        createdAt: { type: string, format: date-time }
+    UserStorage:
+      type: object
+      required: [role, quotaBytes, usedBytes, isUnlimited]
+      properties:
+        role: { type: string, enum: [ADMIN, USER] }
+        quotaBytes: { type: integer, format: int64, nullable: true }
+        usedBytes: { type: integer, format: int64 }
+        isUnlimited: { type: boolean }
+    Folder:
+      type: object
+      required: [id, name, ownerId, parentId, createdAt, updatedAt, deletedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        ownerId: { type: string, format: uuid }
+        parentId: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deletedAt: { type: string, format: date-time, nullable: true }
+    File:
+      type: object
+      required: [id, ownerId, parentFolderId, originalName, storageKey, sizeBytes, checksumSha256, createdAt, updatedAt, deletedAt]
+      properties:
+        id: { type: string, format: uuid }
+        ownerId: { type: string, format: uuid }
+        parentFolderId: { type: string, format: uuid }
+        originalName: { type: string, maxLength: 255 }
+        storageKey: { type: string }
+        contentType: { type: string, nullable: true }
+        sizeBytes: { type: integer, format: int64 }
+        checksumSha256: { type: string, minLength: 64, maxLength: 64 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deletedAt: { type: string, format: date-time, nullable: true }
+    DriveItem:
+      type: object
+      required: [itemType, id, name, ownerId, parentId, createdAt, updatedAt]
+      properties:
+        itemType: { type: string, enum: [folder, file] }
+        id: { type: string, format: uuid }
+        name: { type: string }
+        ownerId: { type: string, format: uuid }
+        parentId: { type: string, format: uuid, nullable: true }
+        contentType: { type: string, nullable: true }
+        sizeBytes: { type: integer, format: int64, nullable: true }
+        checksumSha256: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateFolderRequest:
+      type: object
+      required: [name, parentId]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        parentId: { type: string, format: uuid }
+    UpdateFolderRequest:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        parentId: { type: string, format: uuid }
+paths:
+  /health:
+    get:
+      security: []
+      summary: Health check
+      responses:
+        "200":
+          description: Service is running
+  /api/me:
+    get:
+      summary: Return current user, provisioning user row on first request
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+  /api/me/storage:
+    get:
+      summary: Return current user's role and storage quota foundation fields
+      responses:
+        "200":
+          description: Current user storage quota
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserStorage"
+  /api/drive/root:
+    get:
+      summary: Return current user's My Drive root folder, creating it if missing
+      responses:
+        "200":
+          description: Root folder
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Folder"
+  /api/folders/{folderId}/children:
+    get:
+      summary: Return active child folders and files owned by the current user
+      parameters:
+        - name: folderId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Child folders and files
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DriveItem"
+        "403":
+          description: Folder belongs to another user
+        "404":
+          description: Folder does not exist or is deleted
+  /api/files/upload:
+    post:
+      summary: Upload a file into an owned active folder
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [parentFolderId, file]
+              properties:
+                parentFolderId: { type: string, format: uuid }
+                file: { type: string, format: binary }
+      responses:
+        "200":
+          description: Uploaded file metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/File"
+        "400":
+          description: Invalid file, filename, size, or duplicate filename
+        "403":
+          description: Parent folder belongs to another user
+        "404":
+          description: Parent folder does not exist or is deleted
+  /api/files/{fileId}/download:
+    get:
+      summary: Download an owned active file
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: File bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "403":
+          description: File belongs to another user
+        "404":
+          description: File does not exist or is deleted
+  /api/files/{fileId}:
+    delete:
+      summary: Soft delete an owned active file
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: File soft deleted
+        "403":
+          description: File belongs to another user
+        "404":
+          description: File does not exist or is deleted
+  /api/folders:
+    post:
+      summary: Create a folder under an owned active parent folder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateFolderRequest"
+      responses:
+        "200":
+          description: Created folder
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Folder"
+        "400":
+          description: Invalid name, parentId, or duplicate folder name
+        "403":
+          description: Parent folder belongs to another user
+        "404":
+          description: Parent folder does not exist or is deleted
+  /api/folders/{folderId}:
+    patch:
+      summary: Rename, move, or rename and move an owned active folder
+      parameters:
+        - name: folderId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateFolderRequest"
+      responses:
+        "200":
+          description: Updated folder
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Folder"
+        "400":
+          description: Invalid name, invalid move, or duplicate folder name
+        "403":
+          description: Folder or target parent belongs to another user
+        "404":
+          description: Folder or target parent does not exist or is deleted
+    delete:
+      summary: Soft delete an owned active folder subtree
+      parameters:
+        - name: folderId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Folder subtree soft deleted
+        "400":
+          description: Root folder cannot be deleted
+        "403":
+          description: Folder belongs to another user
+        "404":
+          description: Folder does not exist or is deleted

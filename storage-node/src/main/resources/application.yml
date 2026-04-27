@@ -1,0 +1,7 @@
+server:
+  port: 8091
+owl:
+  storage:
+    node-id: local-node-1
+    volume-root: ./data/storage-node
+
