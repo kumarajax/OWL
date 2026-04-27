@@ -49,17 +49,12 @@ quota: unlimited
 
 ## Start Everything
 
-Terminal 1:
+From a fresh clone:
 
 ```bash
-cd /Users/ajay/Desktop/OWL_DRIVE
+git clone https://github.com/kumarajax/OWL.git
+cd OWL
 ./scripts/dev-up.sh
-```
-
-Terminal 2:
-
-```bash
-cd /Users/ajay/Desktop/OWL_DRIVE
 ./scripts/start-app.sh
 ```
 
@@ -69,41 +64,35 @@ Open:
 http://localhost:3000
 ```
 
+If you prefer separate terminals:
+
+```bash
+cd OWL
+./scripts/dev-up.sh
+```
+
+```bash
+cd OWL/backend
+mvn spring-boot:run
+```
+
+```bash
+cd OWL/frontend
+npm run dev
+```
+
 Stop backend and frontend:
 
 ```bash
-cd /Users/ajay/Desktop/OWL_DRIVE
+cd OWL
 ./scripts/stop-app.sh
 ```
 
 Stop Docker infrastructure:
 
 ```bash
-cd /Users/ajay/Desktop/OWL_DRIVE
+cd OWL
 ./scripts/dev-down.sh
-```
-
-## Manual Start Commands
-
-Terminal 1:
-
-```bash
-cd /Users/ajay/Desktop/OWL_DRIVE
-./scripts/dev-up.sh
-```
-
-Terminal 2:
-
-```bash
-cd /Users/ajay/Desktop/OWL_DRIVE/backend
-mvn spring-boot:run
-```
-
-Terminal 3:
-
-```bash
-cd /Users/ajay/Desktop/OWL_DRIVE/frontend
-npm run dev
 ```
 
 ## Storage
@@ -147,7 +136,7 @@ When an access token expires, the frontend clears the local session and returns 
 Local file bytes are stored under:
 
 ```text
-/Users/ajay/Desktop/OWL_DRIVE/backend/data/storage
+./backend/data/storage
 ```
 
 The configured value is:
@@ -185,6 +174,29 @@ User-provided filenames are stored only as metadata and download display names.
 15. Refresh the browser and confirm the deleted file is hidden.
 16. Log out and login as `adminuser`.
 17. Confirm the sidebar shows `ADMIN` and `Unlimited storage`.
+
+## Clone Notes
+
+After cloning, these should all come up cleanly:
+
+- `postgres` and `keycloak` from `./scripts/dev-up.sh`
+- backend on `http://localhost:8081`
+- frontend on `http://localhost:3000`
+
+If you open the app as `http://127.0.0.1:3000`, the current local config also allows that host.
+
+On Windows, run the commands from Git Bash or WSL, and use Docker Desktop so `docker compose` is available.
+
+## Why The Fresh Clone Failed
+
+The initial clone/import failed because:
+
+- `scripts/start-app.sh` used `setsid`, which is not portable on macOS.
+- `infra/keycloak/realm-export.json` seeded two users with the same email, so Keycloak refused to import the realm.
+- Backend CORS and Keycloak redirect settings only allowed `http://localhost:3000`, not `http://127.0.0.1:3000`.
+- The Next dev server needed an explicit local allowed-origin entry when accessed through `127.0.0.1`.
+
+Those issues are fixed in the current local tree.
 
 ## API Test
 

@@ -26,14 +26,16 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
       "redirectUris": [
-        "http://localhost:3000/*"
+        "http://localhost:3000/*",
+        "http://127.0.0.1:3000/*"
       ],
       "webOrigins": [
-        "http://localhost:3000"
+        "http://localhost:3000",
+        "http://127.0.0.1:3000"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:3000/*"
+        "post.logout.redirect.uris": "http://localhost:3000/*##http://127.0.0.1:3000/*"
       }
     }
   ],
@@ -41,7 +43,7 @@
     {
       "username": "testuser",
       "enabled": true,
-      "email": "kumarajax@gmail.com",
+      "email": "testuser@example.com",
       "emailVerified": true,
       "firstName": "Test",
       "lastName": "User",
@@ -59,7 +61,7 @@
     {
       "username": "adminuser",
       "enabled": true,
-      "email": "kumarajax@gmail.com",
+      "email": "adminuser@example.com",
       "emailVerified": true,
       "firstName": "Admin",
       "lastName": "User",
