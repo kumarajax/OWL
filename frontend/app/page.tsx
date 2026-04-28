@@ -56,11 +56,8 @@ type DriveItem = {
   updatedAt: string;
 };
 
-const browserHost = typeof window === "undefined" ? "localhost" : window.location.hostname;
-const keycloakBaseUrl = process.env.NEXT_PUBLIC_KEYCLOAK_URL ?? `http://${browserHost}:8080`;
 const realm = process.env.NEXT_PUBLIC_KEYCLOAK_REALM ?? "owldrive";
 const clientId = process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID ?? "owl-drive-web";
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? `http://${browserHost}:8081`;
 
 class AuthExpiredError extends Error {
   constructor() {
@@ -219,6 +216,25 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
 
+function resolveServiceBaseUrl(envValue: string | undefined, port: number) {
+  if (envValue) {
+    try {
+      const parsed = new URL(envValue);
+      if (parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") {
+        return envValue;
+      }
+    } catch {
+      return envValue;
+    }
+  }
+
+  if (typeof window !== "undefined") {
+    return `http://${window.location.hostname}:${port}`;
+  }
+
+  return `http://localhost:${port}`;
+}
+
 export default function Home() {
   const [token, setToken] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -232,6 +248,8 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const keycloakBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_KEYCLOAK_URL, 8080);
+  const apiBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL, 8081);
 
   const redirectUri = useMemo(() => {
     if (typeof window === "undefined") return "";
