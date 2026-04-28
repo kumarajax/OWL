@@ -11,5 +11,6 @@ public record UserRecord(
         String role,
         Long quotaBytes,
         long usedBytes,
-        OffsetDateTime createdAt
+        OffsetDateTime createdAt,
+        OffsetDateTime deactivatedAt
 ) {}

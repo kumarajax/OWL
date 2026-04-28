@@ -26,6 +26,13 @@ public class ProvisioningService {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public UserRecord ensureUser(Jwt jwt) {
+        UserRecord user = currentUser(jwt);
+        requireActive(user);
+        return user;
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public UserRecord currentUser(Jwt jwt) {
         String keycloakId = jwt.getSubject();
         String username = claim(jwt, "preferred_username", keycloakId);
         String email = requiredEmail(jwt);
@@ -34,11 +41,17 @@ public class ProvisioningService {
 
         Optional<UserRecord> existing = findUserByKeycloakId(keycloakId);
         if (existing.isPresent()) {
+            if (existing.get().deactivatedAt() != null) {
+                return existing.get();
+            }
             return updateUser(existing.get().id(), keycloakId, email, username, role, quotaBytes);
         }
 
         Optional<UserRecord> existingByEmail = findSingleUserByVerifiedEmail(jwt, email);
         if (existingByEmail.isPresent()) {
+            if (existingByEmail.get().deactivatedAt() != null) {
+                return existingByEmail.get();
+            }
             return updateUser(existingByEmail.get().id(), keycloakId, email, username, role, quotaBytes);
         }
 
@@ -46,7 +59,7 @@ public class ProvisioningService {
                 """
                 INSERT INTO users (keycloak_id, email, username, role, quota_bytes, used_bytes)
                 VALUES (?, ?, ?, ?, ?, 0)
-                RETURNING id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at
+                RETURNING id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
                 """,
                 this::mapUser,
                 keycloakId,
@@ -58,13 +71,47 @@ public class ProvisioningService {
         return user;
     }
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public UserRecord activateUser(Jwt jwt) {
+        String keycloakId = jwt.getSubject();
+        String username = claim(jwt, "preferred_username", keycloakId);
+        String email = requiredEmail(jwt);
+        String role = resolveRole(jwt);
+        Long quotaBytes = "ADMIN".equals(role) ? null : DEFAULT_USER_QUOTA_BYTES;
+
+        Optional<UserRecord> existing = findUserByKeycloakId(keycloakId);
+        if (existing.isEmpty()) {
+            existing = findSingleUserByVerifiedEmail(jwt, email);
+        }
+        if (existing.isEmpty()) {
+            return ensureUser(jwt);
+        }
+
+        UserRecord user = jdbc.queryForObject(
+                """
+                UPDATE users
+                SET keycloak_id = ?, email = ?, username = ?, role = ?, quota_bytes = ?, used_bytes = 0, deactivated_at = NULL
+                WHERE id = ?
+                RETURNING id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
+                """,
+                this::mapUser,
+                keycloakId,
+                email,
+                username,
+                role,
+                quotaBytes,
+                existing.get().id());
+        ensureRootFolder(user);
+        return user;
+    }
+
     private UserRecord updateUser(UUID id, String keycloakId, String email, String username, String role, Long quotaBytes) {
         UserRecord user = jdbc.queryForObject(
                 """
                 UPDATE users
                 SET keycloak_id = ?, email = ?, username = ?, role = ?, quota_bytes = ?
-                WHERE id = ?
-                RETURNING id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at
+                WHERE id = ? AND deactivated_at IS NULL
+                RETURNING id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
                 """,
                 this::mapUser,
                 keycloakId,
@@ -75,6 +122,12 @@ public class ProvisioningService {
                 id);
         ensureRootFolder(user);
         return user;
+    }
+
+    private void requireActive(UserRecord user) {
+        if (user.deactivatedAt() != null) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Account is deactivated");
+        }
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -96,7 +149,7 @@ public class ProvisioningService {
     private Optional<UserRecord> findUserByKeycloakId(String keycloakId) {
         return jdbc.query(
                 """
-                SELECT id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at
+                SELECT id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
                 FROM users
                 WHERE keycloak_id = ?
                 """,
@@ -113,7 +166,7 @@ public class ProvisioningService {
         }
         var matches = jdbc.query(
                 """
-                SELECT id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at
+                SELECT id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
                 FROM users
                 WHERE lower(email) = lower(?)
                 """,
@@ -171,7 +224,8 @@ public class ProvisioningService {
                 rs.getString("role"),
                 rs.getObject("quota_bytes", Long.class),
                 rs.getLong("used_bytes"),
-                rs.getObject("created_at", java.time.OffsetDateTime.class));
+                rs.getObject("created_at", java.time.OffsetDateTime.class),
+                rs.getObject("deactivated_at", java.time.OffsetDateTime.class));
     }
 
     private FolderRecord mapFolder(ResultSet rs, int rowNum) throws SQLException {

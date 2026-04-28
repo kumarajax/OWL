@@ -8,8 +8,10 @@ import java.nio.file.Path;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.UUID;
+import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -49,6 +51,21 @@ public class LocalStorageService {
         Path path = resolveStorageKey(storageKey);
         Files.deleteIfExists(path);
         pruneEmptyParents(path.getParent());
+    }
+
+    public void deleteOwnerStorage(UUID ownerId) throws IOException {
+        Path ownerRoot = storageRoot.resolve(ownerId.toString()).normalize();
+        if (!ownerRoot.startsWith(storageRoot)) {
+            throw new IllegalArgumentException("Invalid owner storage path");
+        }
+        if (!Files.exists(ownerRoot)) {
+            return;
+        }
+        try (Stream<Path> paths = Files.walk(ownerRoot)) {
+            for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(path);
+            }
+        }
     }
 
     private void pruneEmptyParents(Path start) throws IOException {

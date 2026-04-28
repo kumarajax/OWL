@@ -14,7 +14,8 @@ import {
   Plus,
   RefreshCw,
   Trash2,
-  Upload
+  Upload,
+  UserCircle
 } from "lucide-react";
 
 type User = {
@@ -24,6 +25,7 @@ type User = {
   role?: string;
   quotaBytes?: number | null;
   usedBytes?: number;
+  deactivatedAt?: string | null;
 };
 
 type StorageInfo = {
@@ -257,6 +259,10 @@ export default function Home() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [deactivationDialogOpen, setDeactivationDialogOpen] = useState(false);
+  const [deactivationConfirmation, setDeactivationConfirmation] = useState("");
+  const [deactivating, setDeactivating] = useState(false);
+  const [activating, setActivating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const keycloakBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_KEYCLOAK_URL, 8080);
   const apiBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL, 8081);
@@ -288,6 +294,10 @@ export default function Home() {
     setChildren([]);
     setLoading(false);
     setUploading(false);
+    setDeactivationDialogOpen(false);
+    setDeactivationConfirmation("");
+    setDeactivating(false);
+    setActivating(false);
     setError(message);
   }
 
@@ -361,31 +371,43 @@ export default function Home() {
     [jsonHeaders]
   );
 
+  async function loadActiveDrive(headers: Record<string, string>) {
+    const storageResponse = await fetch(`${apiBaseUrl}/api/me/storage`, { headers });
+    const storage = await readJson<StorageInfo>(storageResponse);
+
+    const rootResponse = await fetch(`${apiBaseUrl}/api/drive/root`, { headers });
+    const root = await readJson<FolderRecord>(rootResponse);
+
+    const childResponse = await fetch(`${apiBaseUrl}/api/folders/${root.id}/children`, { headers });
+    const rootChildren = await readJson<DriveItem[]>(childResponse);
+
+    setStorageInfo(storage);
+    setRootFolder(root);
+    setCurrentFolder(root);
+    setBreadcrumbs([root]);
+    setChildren(rootChildren);
+  }
+
   useEffect(() => {
     if (!token || !jsonHeaders) return;
+    const headers = jsonHeaders;
 
     async function loadDrive() {
       setLoading(true);
       setError("");
       try {
-        const meResponse = await fetch(`${apiBaseUrl}/api/me`, { headers: jsonHeaders });
+        const meResponse = await fetch(`${apiBaseUrl}/api/me`, { headers });
         const me = await readJson<User>(meResponse);
-
-        const storageResponse = await fetch(`${apiBaseUrl}/api/me/storage`, { headers: jsonHeaders });
-        const storage = await readJson<StorageInfo>(storageResponse);
-
-        const rootResponse = await fetch(`${apiBaseUrl}/api/drive/root`, { headers: jsonHeaders });
-        const root = await readJson<FolderRecord>(rootResponse);
-
-        const childResponse = await fetch(`${apiBaseUrl}/api/folders/${root.id}/children`, { headers: jsonHeaders });
-        const rootChildren = await readJson<DriveItem[]>(childResponse);
-
         setUser(me);
-        setStorageInfo(storage);
-        setRootFolder(root);
-        setCurrentFolder(root);
-        setBreadcrumbs([root]);
-        setChildren(rootChildren);
+        if (me.deactivatedAt) {
+          setStorageInfo(null);
+          setRootFolder(null);
+          setCurrentFolder(null);
+          setBreadcrumbs([]);
+          setChildren([]);
+          return;
+        }
+        await loadActiveDrive(headers);
       } catch (err) {
         handleRequestError(err, "Unable to load drive");
       } finally {
@@ -438,6 +460,34 @@ export default function Home() {
     });
     if (idToken) params.set("id_token_hint", idToken);
     window.location.href = `${keycloakBaseUrl}/realms/${realm}/protocol/openid-connect/logout?${params}`;
+  }
+
+  function openDeactivateAccountDialog() {
+    setError("");
+    setDeactivationConfirmation("");
+    setDeactivationDialogOpen(true);
+  }
+
+  async function activateAccount() {
+    if (!jsonHeaders) return;
+    setActivating(true);
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/me/activate`, {
+        method: "POST",
+        headers: jsonHeaders
+      });
+      const activatedUser = await readJson<User>(response);
+      setUser(activatedUser);
+      await loadActiveDrive(jsonHeaders);
+      setError("Account activated. Your default quota is restored.");
+    } catch (err) {
+      handleRequestError(err, "Unable to activate account");
+    } finally {
+      setActivating(false);
+      setLoading(false);
+    }
   }
 
   async function openFolder(folder: FolderRecord) {
@@ -583,7 +633,42 @@ export default function Home() {
     }
   }
 
+  async function deactivateAccount() {
+    if (!jsonHeaders || !user) return;
+    const typedEmail = deactivationConfirmation.trim();
+    if (typedEmail.toLowerCase() !== user.email.toLowerCase()) {
+      setError("Confirmation did not match your email.");
+      return;
+    }
+
+    setLoading(true);
+    setDeactivating(true);
+    setError("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/me`, {
+        method: "DELETE",
+        headers: jsonHeaders,
+        body: JSON.stringify({ confirmation: typedEmail })
+      });
+      if (!response.ok) await readJson(response);
+      const idToken = localStorage.getItem("owl_id_token");
+      window.alert("Account deactivated. Your OWL Drive files were deleted.");
+      clearSession();
+      const params = new URLSearchParams({
+        client_id: clientId,
+        post_logout_redirect_uri: getBrowserOrigin()
+      });
+      if (idToken) params.set("id_token_hint", idToken);
+      window.location.href = `${keycloakBaseUrl}/realms/${realm}/protocol/openid-connect/logout?${params}`;
+    } catch (err) {
+      handleRequestError(err, "Unable to deactivate account");
+      setLoading(false);
+      setDeactivating(false);
+    }
+  }
+
   const parentFolder = breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2] : null;
+  const accountDeactivated = Boolean(user?.deactivatedAt);
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
@@ -602,6 +687,59 @@ export default function Home() {
           </div>
         ) : null}
       </header>
+
+      {deactivationDialogOpen && user ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-5 shadow-xl">
+            <div className="flex items-start gap-3">
+              <div className="mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-700">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-lg font-semibold text-slate-900">Deactivate account</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  This will permanently delete all OWL Drive files for {user.email}.
+                </p>
+              </div>
+            </div>
+
+            <label className="mt-5 block text-sm font-medium text-slate-700" htmlFor="deactivate-confirmation">
+              Type your email to confirm
+            </label>
+            <input
+              id="deactivate-confirmation"
+              value={deactivationConfirmation}
+              onChange={(event) => setDeactivationConfirmation(event.target.value)}
+              disabled={deactivating}
+              className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-red-400 focus:ring-2 focus:ring-red-100 disabled:bg-slate-100"
+              autoFocus
+            />
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeactivationDialogOpen(false);
+                  setDeactivationConfirmation("");
+                }}
+                disabled={deactivating}
+                className="inline-flex h-10 items-center rounded-md border border-slate-300 bg-white px-4 font-semibold disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={deactivateAccount}
+                disabled={deactivating || deactivationConfirmation.trim().toLowerCase() !== user.email.toLowerCase()}
+                className="inline-flex h-10 items-center gap-2 rounded-md bg-red-600 px-4 font-semibold text-white disabled:opacity-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                {deactivating ? "Deactivating" : "Deactivate"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {!token ? (
         <section className="mx-auto max-w-3xl px-6 py-12">
@@ -687,12 +825,92 @@ export default function Home() {
               My Drive
             </button>
             <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-              <div className="font-semibold text-slate-700">{storageInfo?.role ?? "USER"}</div>
-              <div className="mt-1 text-slate-600">{formatStorage(storageInfo)}</div>
+              <div className="font-semibold text-slate-700">{user?.role ?? storageInfo?.role ?? "USER"}</div>
+              <div className="mt-1 text-slate-600">{accountDeactivated ? "Account deactivated" : formatStorage(storageInfo)}</div>
+            </div>
+            <div className="mt-5 border-t border-slate-200 pt-5 text-sm">
+              <div className="flex min-w-0 items-center gap-2 text-slate-700">
+                <UserCircle className="h-4 w-4 shrink-0" />
+                <span className="truncate font-medium">{user?.email || user?.username}</span>
+              </div>
+              {accountDeactivated ? (
+                <button
+                  type="button"
+                  onClick={activateAccount}
+                  disabled={loading || activating}
+                  className="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-green-600 px-3 font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-4 w-4 ${activating ? "animate-spin" : ""}`} />
+                  Activate account
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={openDeactivateAccountDialog}
+                  disabled={loading || uploading}
+                  className="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border border-red-200 bg-white px-3 font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Deactivate account
+                </button>
+              )}
             </div>
           </aside>
 
           <section className="flex-1 px-5 py-5">
+            <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-200 pb-4 text-sm md:hidden">
+              <div className="flex min-w-0 items-center gap-2 text-slate-700">
+                <UserCircle className="h-4 w-4 shrink-0" />
+                <span className="truncate font-medium">{user?.email || user?.username}</span>
+              </div>
+              {accountDeactivated ? (
+                <button
+                  type="button"
+                  onClick={activateAccount}
+                  disabled={loading || activating}
+                  className="inline-flex h-10 shrink-0 items-center gap-2 rounded-md bg-green-600 px-3 font-semibold text-white disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-4 w-4 ${activating ? "animate-spin" : ""}`} />
+                  Activate
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={openDeactivateAccountDialog}
+                  disabled={loading || uploading}
+                  className="inline-flex h-10 shrink-0 items-center gap-2 rounded-md border border-red-200 bg-white px-3 font-semibold text-red-700 disabled:opacity-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Deactivate
+                </button>
+              )}
+            </div>
+
+            {accountDeactivated ? (
+              <div className="rounded-lg border border-green-200 bg-white p-6 shadow-sm">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-green-50 text-green-700">
+                    <UserCircle className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h1 className="text-xl font-semibold text-slate-900">Account deactivated</h1>
+                    <p className="mt-2 text-sm text-slate-600">
+                      Activate this account to create a fresh OWL Drive with the default quota.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={activateAccount}
+                      disabled={loading || activating}
+                      className="mt-5 inline-flex h-11 items-center gap-2 rounded-md bg-green-600 px-5 font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+                    >
+                      <RefreshCw className={`h-4 w-4 ${activating ? "animate-spin" : ""}`} />
+                      {activating ? "Activating" : "Activate account"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-2">
                 <button
@@ -821,6 +1039,8 @@ export default function Home() {
                 ))
               )}
             </div>
+              </>
+            )}
           </section>
         </div>
       )}
