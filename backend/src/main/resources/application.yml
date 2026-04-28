@@ -14,15 +14,17 @@ spring:
     enabled: true
     schemas: app
     create-schemas: true
-  security:
-    oauth2:
-      resourceserver:
-        jwt:
-          issuer-uri: http://localhost:8080/realms/owldrive
 
 app:
   cors:
-    allowed-origins: http://localhost:3000,http://127.0.0.1:3000,http://192.168.1.126:3000
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:}
+    allowed-origin-patterns: ${APP_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:3000,http://127.0.0.1:3000,http://192.168.*.*:3000,http://10.*.*.*:3000,http://172.*.*.*:3000}
+  security:
+    oauth2:
+      jwt:
+        jwk-set-uri: ${APP_SECURITY_OAUTH2_JWT_JWK_SET_URI:${KEYCLOAK_INTERNAL_URL:http://localhost:8080}/realms/owldrive/protocol/openid-connect/certs}
+        allowed-issuers: ${APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUERS:}
+        allowed-issuer-patterns: ${APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUER_PATTERNS:http://localhost:8080/realms/owldrive,http://127.0.0.1:8080/realms/owldrive,http://192.168.*.*:8080/realms/owldrive,http://10.*.*.*:8080/realms/owldrive,http://172.*.*.*:8080/realms/owldrive}
   storage:
     local:
       root: ./data/storage

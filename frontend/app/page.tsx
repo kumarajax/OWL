@@ -416,6 +416,7 @@ export default function Home() {
     const verifier = randomString();
     const challenge = await sha256(verifier);
     sessionStorage.setItem("owl_pkce_verifier", verifier);
+    const redirectUri = getBrowserOrigin();
     const params = new URLSearchParams({
       client_id: clientId,
       response_type: "code",
