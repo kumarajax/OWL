@@ -206,6 +206,12 @@ function formatBytes(value: number | null) {
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
+const dateFormatter = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeStyle: "short",
+  timeZone: "UTC"
+});
+
 function formatStorage(info: StorageInfo | null) {
   if (!info) return "Loading storage...";
   if (info.isUnlimited) return "Unlimited storage";
@@ -213,7 +219,11 @@ function formatStorage(info: StorageInfo | null) {
 }
 
 function formatDate(value: string) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+  return dateFormatter.format(new Date(value));
+}
+
+function getBrowserOrigin() {
+  return typeof window === "undefined" ? "" : window.location.origin;
 }
 
 function resolveServiceBaseUrl(envValue: string | undefined, port: number) {
@@ -250,11 +260,6 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const keycloakBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_KEYCLOAK_URL, 8080);
   const apiBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL, 8081);
-
-  const redirectUri = useMemo(() => {
-    if (typeof window === "undefined") return "";
-    return window.location.origin;
-  }, []);
 
   const jsonHeaders = useMemo(() => {
     return token ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } : undefined;
@@ -395,6 +400,7 @@ export default function Home() {
     const verifier = randomString();
     const challenge = await sha256(verifier);
     sessionStorage.setItem("owl_pkce_verifier", verifier);
+    const redirectUri = getBrowserOrigin();
     const params = new URLSearchParams({
       client_id: clientId,
       response_type: "code",
@@ -424,9 +430,10 @@ export default function Home() {
   function logout() {
     const idToken = localStorage.getItem("owl_id_token");
     clearSession();
+    const origin = getBrowserOrigin();
     const params = new URLSearchParams({
       client_id: clientId,
-      post_logout_redirect_uri: window.location.origin
+      post_logout_redirect_uri: origin
     });
     if (idToken) params.set("id_token_hint", idToken);
     window.location.href = `${keycloakBaseUrl}/realms/${realm}/protocol/openid-connect/logout?${params}`;
