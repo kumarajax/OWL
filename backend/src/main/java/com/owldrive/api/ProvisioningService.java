@@ -33,12 +33,12 @@ public class ProvisioningService {
 
         Optional<UserRecord> existing = findUserByKeycloakId(keycloakId);
         if (existing.isPresent()) {
-            return existing.get();
+            return updateUser(existing.get().id(), keycloakId, email, username, role, quotaBytes);
         }
 
         Optional<UserRecord> existingByEmail = findSingleUserByVerifiedEmail(jwt, email);
         if (existingByEmail.isPresent()) {
-            return existingByEmail.get();
+            return updateUser(existingByEmail.get().id(), keycloakId, email, username, role, quotaBytes);
         }
 
         UserRecord user = jdbc.queryForObject(
@@ -53,6 +53,25 @@ public class ProvisioningService {
                 username,
                 role,
                 quotaBytes);
+        ensureRootFolder(user);
+        return user;
+    }
+
+    private UserRecord updateUser(UUID id, String keycloakId, String email, String username, String role, Long quotaBytes) {
+        UserRecord user = jdbc.queryForObject(
+                """
+                UPDATE users
+                SET keycloak_id = ?, email = ?, username = ?, role = ?, quota_bytes = ?
+                WHERE id = ?
+                RETURNING id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at
+                """,
+                this::mapUser,
+                keycloakId,
+                email,
+                username,
+                role,
+                quotaBytes,
+                id);
         ensureRootFolder(user);
         return user;
     }
