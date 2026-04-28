@@ -2,7 +2,8 @@
   "realm": "owldrive",
   "enabled": true,
   "accessTokenLifespan": 300,
-  "registrationAllowed": false,
+  "registrationAllowed": true,
+  "registrationEmailAsUsername": true,
   "resetPasswordAllowed": true,
   "verifyEmail": false,
   "roles": {

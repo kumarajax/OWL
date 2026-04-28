@@ -64,6 +64,8 @@ Open:
 http://localhost:3000
 ```
 
+On the login screen, use `Create account` to register with an email and password. The email becomes the username.
+
 If you prefer separate terminals:
 
 ```bash
