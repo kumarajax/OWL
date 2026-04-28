@@ -11,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
@@ -23,7 +24,7 @@ public class ProvisioningService {
         this.jdbc = jdbc;
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public UserRecord ensureUser(Jwt jwt) {
         String keycloakId = jwt.getSubject();
         String username = claim(jwt, "preferred_username", keycloakId);
@@ -76,7 +77,7 @@ public class ProvisioningService {
         return user;
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public FolderRecord ensureRootFolder(UserRecord user) {
         Optional<FolderRecord> existing = findRootFolder(user.id());
         if (existing.isPresent()) {
