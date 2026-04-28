@@ -4,8 +4,8 @@ server:
 spring:
   servlet:
     multipart:
-      max-file-size: 25MB
-      max-request-size: 25MB
+      max-file-size: ${APP_STORAGE_MAX_FILE_SIZE:1GB}
+      max-request-size: ${APP_STORAGE_MAX_REQUEST_SIZE:1GB}
   datasource:
     url: jdbc:postgresql://localhost:5432/owldrive?currentSchema=app
     username: owldrive
@@ -16,6 +16,8 @@ spring:
     create-schemas: true
 
 app:
+  users:
+    max-users: ${APP_USERS_MAX_USERS:1000}
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:}
     allowed-origin-patterns: ${APP_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:3000,http://127.0.0.1:3000,http://192.168.*.*:3000,http://10.*.*.*:3000,http://172.*.*.*:3000}
@@ -28,5 +30,5 @@ app:
   storage:
     local:
       root: ./data/storage
-    max-upload-bytes: 26214400
+    max-upload-bytes: ${APP_STORAGE_MAX_UPLOAD_BYTES:1073741824}
     reject-empty-files: true

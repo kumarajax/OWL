@@ -1,5 +1,6 @@
 package com.owldrive.api;
 
+import java.io.IOException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
@@ -7,22 +8,33 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class FolderService {
+    private static final Logger log = LoggerFactory.getLogger(FolderService.class);
+
     private final JdbcTemplate jdbc;
     private final ProvisioningService provisioningService;
+    private final LocalStorageService localStorageService;
 
-    public FolderService(JdbcTemplate jdbc, ProvisioningService provisioningService) {
+    public FolderService(
+            JdbcTemplate jdbc,
+            ProvisioningService provisioningService,
+            LocalStorageService localStorageService) {
         this.jdbc = jdbc;
         this.provisioningService = provisioningService;
+        this.localStorageService = localStorageService;
     }
 
     @Transactional(readOnly = true)
@@ -148,6 +160,30 @@ public class FolderService {
         if (folder.parentId() == null) {
             throw badRequest("Root folder cannot be deleted");
         }
+        List<DeletedFileBytes> deletedFileBytes = jdbc.query(
+                """
+                WITH RECURSIVE subtree AS (
+                  SELECT id
+                  FROM folders
+                  WHERE id = ? AND owner_id = ? AND deleted_at IS NULL
+                  UNION ALL
+                  SELECT child.id
+                  FROM folders child
+                  JOIN subtree parent ON child.parent_id = parent.id
+                  WHERE child.owner_id = ? AND child.deleted_at IS NULL
+                )
+                SELECT storage_key, size_bytes
+                FROM files
+                WHERE owner_id = ?
+                  AND parent_folder_id IN (SELECT id FROM subtree)
+                  AND deleted_at IS NULL
+                """,
+                (rs, rowNum) -> new DeletedFileBytes(rs.getString("storage_key"), rs.getLong("size_bytes")),
+                folder.id(),
+                user.id(),
+                user.id(),
+                user.id());
+        long releasedBytes = deletedFileBytes.stream().mapToLong(DeletedFileBytes::sizeBytes).sum();
 
         jdbc.update(
                 """
@@ -191,6 +227,37 @@ public class FolderService {
                 user.id(),
                 user.id(),
                 user.id());
+        if (releasedBytes > 0) {
+            jdbc.update(
+                    """
+                    UPDATE users
+                    SET used_bytes = GREATEST(used_bytes - ?, 0)
+                    WHERE id = ?
+                    """,
+                    releasedBytes,
+                    user.id());
+        }
+        deleteStoredBytesAfterCommit(deletedFileBytes.stream().map(DeletedFileBytes::storageKey).toList());
+    }
+
+    private record DeletedFileBytes(String storageKey, long sizeBytes) {}
+
+    private void deleteStoredBytesAfterCommit(List<String> storageKeys) {
+        if (storageKeys.isEmpty()) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                for (String storageKey : storageKeys) {
+                    try {
+                        localStorageService.deleteStorageKey(storageKey);
+                    } catch (IOException ex) {
+                        log.warn("Unable to delete stored bytes at {}", storageKey, ex);
+                    }
+                }
+            }
+        });
     }
 
     FolderRecord requireOwnedActiveFolder(UserRecord user, UUID folderId) {

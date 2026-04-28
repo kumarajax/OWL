@@ -35,6 +35,12 @@ type StorageInfo = {
   isUnlimited: boolean;
 };
 
+type RegistrationStatus = {
+  activeUsers: number;
+  maxUsers: number;
+  registrationAvailable: boolean;
+};
+
 type FolderRecord = {
   id: string;
   name: string;
@@ -263,6 +269,7 @@ export default function Home() {
   const [deactivationConfirmation, setDeactivationConfirmation] = useState("");
   const [deactivating, setDeactivating] = useState(false);
   const [activating, setActivating] = useState(false);
+  const [registrationStatus, setRegistrationStatus] = useState<RegistrationStatus | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const keycloakBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_KEYCLOAK_URL, 8080);
   const apiBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL, 8081);
@@ -279,6 +286,25 @@ export default function Home() {
     const storedToken = localStorage.getItem("owl_access_token");
     if (storedToken) setToken(storedToken);
   }, []);
+
+  useEffect(() => {
+    async function loadRegistrationStatus() {
+      try {
+        const response = await fetch(`${apiBaseUrl}/api/public/registration`);
+        setRegistrationStatus(await readJson<RegistrationStatus>(response));
+      } catch {
+        setRegistrationStatus(null);
+      }
+    }
+
+    loadRegistrationStatus();
+  }, [apiBaseUrl]);
+
+  useEffect(() => {
+    if (registrationStatus && !registrationStatus.registrationAvailable && authMode === "register") {
+      setAuthMode("login");
+    }
+  }, [registrationStatus, authMode]);
 
   function clearSession(message = "") {
     localStorage.removeItem("owl_access_token");
@@ -372,8 +398,7 @@ export default function Home() {
   );
 
   async function loadActiveDrive(headers: Record<string, string>) {
-    const storageResponse = await fetch(`${apiBaseUrl}/api/me/storage`, { headers });
-    const storage = await readJson<StorageInfo>(storageResponse);
+    const storage = await loadStorage(headers);
 
     const rootResponse = await fetch(`${apiBaseUrl}/api/drive/root`, { headers });
     const root = await readJson<FolderRecord>(rootResponse);
@@ -386,6 +411,16 @@ export default function Home() {
     setCurrentFolder(root);
     setBreadcrumbs([root]);
     setChildren(rootChildren);
+  }
+
+  async function loadStorage(headers: Record<string, string>) {
+    const storageResponse = await fetch(`${apiBaseUrl}/api/me/storage`, { headers });
+    return readJson<StorageInfo>(storageResponse);
+  }
+
+  async function refreshStorage() {
+    if (!jsonHeaders) return;
+    setStorageInfo(await loadStorage(jsonHeaders));
   }
 
   useEffect(() => {
@@ -435,6 +470,10 @@ export default function Home() {
   }
 
   async function registerAccount() {
+    if (registrationStatus && !registrationStatus.registrationAvailable) {
+      setError("Max usage reached.");
+      return;
+    }
     const verifier = randomString();
     const challenge = await sha256(verifier);
     sessionStorage.setItem("owl_pkce_verifier", verifier);
@@ -559,6 +598,7 @@ export default function Home() {
       });
       if (!response.ok) await readJson(response);
       await loadChildren(currentFolder);
+      await refreshStorage();
     } catch (err) {
       handleRequestError(err, "Unable to delete folder");
       setLoading(false);
@@ -584,6 +624,7 @@ export default function Home() {
       });
       await readJson(response);
       await loadChildren(currentFolder);
+      await refreshStorage();
     } catch (err) {
       handleRequestError(err, "Unable to upload file");
     } finally {
@@ -627,6 +668,7 @@ export default function Home() {
       });
       if (!response.ok) await readJson(response);
       await loadChildren(currentFolder);
+      await refreshStorage();
     } catch (err) {
       handleRequestError(err, "Unable to delete file");
       setLoading(false);
@@ -669,6 +711,7 @@ export default function Home() {
 
   const parentFolder = breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2] : null;
   const accountDeactivated = Boolean(user?.deactivatedAt);
+  const registrationFull = registrationStatus ? !registrationStatus.registrationAvailable : false;
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
@@ -763,16 +806,26 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => {
+                  if (registrationFull) return;
                   setAuthMode("register");
                   setError("");
                 }}
+                disabled={registrationFull}
                 className={`rounded-md px-3 py-2 text-sm font-semibold ${
-                  authMode === "register" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
+                  authMode === "register"
+                    ? "bg-slate-900 text-white"
+                    : registrationFull
+                      ? "cursor-not-allowed text-slate-400"
+                      : "text-slate-600 hover:bg-slate-100"
                 }`}
               >
                 Create account
               </button>
             </div>
+
+            {registrationFull ? (
+              <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">Max usage reached.</p>
+            ) : null}
 
             {authMode === "login" ? (
               <>
@@ -780,9 +833,11 @@ export default function Home() {
                   <LogIn className="h-4 w-4" />
                   Login with Keycloak
                 </button>
-                <p className="mt-4 text-sm text-slate-600">
-                  New users can create an account here. The email becomes the username.
-                </p>
+                {!registrationFull ? (
+                  <p className="mt-4 text-sm text-slate-600">
+                    New users can create an account here. The email becomes the username.
+                  </p>
+                ) : null}
               </>
             ) : (
               <div className="mt-6 space-y-4">
@@ -793,7 +848,8 @@ export default function Home() {
                   <button
                     type="button"
                     onClick={() => registerAccount()}
-                    className="inline-flex h-11 items-center gap-2 rounded-md bg-blue-600 px-5 font-semibold text-white"
+                    disabled={registrationFull}
+                    className="inline-flex h-11 items-center gap-2 rounded-md bg-blue-600 px-5 font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
                     <Plus className="h-4 w-4" />
                     Create account

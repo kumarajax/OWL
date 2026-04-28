@@ -38,7 +38,7 @@ public class FileService {
             ProvisioningService provisioningService,
             FolderService folderService,
             LocalStorageService localStorageService,
-            @Value("${app.storage.max-upload-bytes:26214400}") long maxUploadBytes,
+            @Value("${app.storage.max-upload-bytes:1073741824}") long maxUploadBytes,
             @Value("${app.storage.reject-empty-files:true}") boolean rejectEmptyFiles) {
         this.jdbc = jdbc;
         this.provisioningService = provisioningService;
@@ -69,6 +69,7 @@ public class FileService {
         }
 
         try {
+            reserveUserStorage(user, storedFile.sizeBytes());
             return jdbc.queryForObject(
                     """
                     INSERT INTO files (
@@ -90,7 +91,11 @@ public class FileService {
                     storedFile.sizeBytes(),
                     storedFile.checksumSha256());
         } catch (DataIntegrityViolationException ex) {
+            deleteStoredBytesQuietly(storedFile);
             throw badRequest("A file with this name already exists here");
+        } catch (ResponseStatusException ex) {
+            deleteStoredBytesQuietly(storedFile);
+            throw ex;
         }
     }
 
@@ -121,7 +126,36 @@ public class FileService {
                 """,
                 file.id(),
                 user.id());
+        releaseUserStorage(user, file.sizeBytes());
         deleteStoredBytesAfterCommit(file);
+    }
+
+    private void reserveUserStorage(UserRecord user, long sizeBytes) {
+        int updated = jdbc.update(
+                """
+                UPDATE users
+                SET used_bytes = used_bytes + ?
+                WHERE id = ?
+                  AND deactivated_at IS NULL
+                  AND (quota_bytes IS NULL OR used_bytes + ? <= quota_bytes)
+                """,
+                sizeBytes,
+                user.id(),
+                sizeBytes);
+        if (updated != 1) {
+            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "Storage quota exceeded");
+        }
+    }
+
+    private void releaseUserStorage(UserRecord user, long sizeBytes) {
+        jdbc.update(
+                """
+                UPDATE users
+                SET used_bytes = GREATEST(used_bytes - ?, 0)
+                WHERE id = ?
+                """,
+                sizeBytes,
+                user.id());
     }
 
     private void deleteStoredBytesAfterCommit(FileRecord file) {
@@ -135,6 +169,14 @@ public class FileService {
                 }
             }
         });
+    }
+
+    private void deleteStoredBytesQuietly(StoredFile storedFile) {
+        try {
+            localStorageService.deleteStorageKey(storedFile.storageKey());
+        } catch (IOException ex) {
+            log.warn("Unable to delete stored bytes after failed upload at {}", storedFile.storageKey(), ex);
+        }
     }
 
     private FileRecord requireOwnedActiveFile(UserRecord user, UUID fileId) {

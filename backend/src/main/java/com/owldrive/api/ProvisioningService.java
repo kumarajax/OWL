@@ -19,9 +19,11 @@ public class ProvisioningService {
     private static final long DEFAULT_USER_QUOTA_BYTES = 2L * 1024 * 1024 * 1024;
 
     private final JdbcTemplate jdbc;
+    private final UserCapacityService userCapacityService;
 
-    public ProvisioningService(JdbcTemplate jdbc) {
+    public ProvisioningService(JdbcTemplate jdbc, UserCapacityService userCapacityService) {
         this.jdbc = jdbc;
+        this.userCapacityService = userCapacityService;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -55,6 +57,7 @@ public class ProvisioningService {
             return updateUser(existingByEmail.get().id(), keycloakId, email, username, role, quotaBytes);
         }
 
+        userCapacityService.requireAvailableSlot();
         UserRecord user = jdbc.queryForObject(
                 """
                 INSERT INTO users (keycloak_id, email, username, role, quota_bytes, used_bytes)
@@ -87,6 +90,9 @@ public class ProvisioningService {
             return ensureUser(jwt);
         }
 
+        if (existing.get().deactivatedAt() != null) {
+            userCapacityService.requireAvailableSlot();
+        }
         UserRecord user = jdbc.queryForObject(
                 """
                 UPDATE users

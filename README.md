@@ -145,8 +145,18 @@ The configured value is:
 
 ```yaml
 app.storage.local.root: ./data/storage
-app.storage.max-upload-bytes: 26214400
+spring.servlet.multipart.max-file-size: 1GB
+spring.servlet.multipart.max-request-size: 1GB
+app.storage.max-upload-bytes: 1073741824
 app.storage.reject-empty-files: true
+```
+
+The upload limits can be overridden with:
+
+```bash
+APP_STORAGE_MAX_FILE_SIZE=1GB
+APP_STORAGE_MAX_REQUEST_SIZE=1GB
+APP_STORAGE_MAX_UPLOAD_BYTES=1073741824
 ```
 
 Physical storage paths use generated IDs only:
@@ -156,6 +166,22 @@ Physical storage paths use generated IDs only:
 ```
 
 User-provided filenames are stored only as metadata and download display names.
+
+## User Capacity
+
+OWL Drive defaults to 1000 active users. Change the limit with:
+
+```yaml
+app.users.max-users: 1000
+```
+
+or the environment variable:
+
+```bash
+APP_USERS_MAX_USERS=1000
+```
+
+When active users reach this limit, the frontend disables account creation and the backend rejects new OWL Drive provisioning.
 
 ## Browser Test
 
