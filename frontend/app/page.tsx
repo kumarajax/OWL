@@ -56,10 +56,11 @@ type DriveItem = {
   updatedAt: string;
 };
 
-const keycloakBaseUrl = process.env.NEXT_PUBLIC_KEYCLOAK_URL ?? "http://localhost:8080";
+const browserHost = typeof window === "undefined" ? "localhost" : window.location.hostname;
+const keycloakBaseUrl = process.env.NEXT_PUBLIC_KEYCLOAK_URL ?? `http://${browserHost}:8080`;
 const realm = process.env.NEXT_PUBLIC_KEYCLOAK_REALM ?? "owldrive";
 const clientId = process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID ?? "owl-drive-web";
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8081";
+const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? `http://${browserHost}:8081`;
 
 class AuthExpiredError extends Error {
   constructor() {
