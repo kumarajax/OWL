@@ -14,12 +14,18 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 public class FileService {
+    private static final Logger log = LoggerFactory.getLogger(FileService.class);
+
     private final JdbcTemplate jdbc;
     private final ProvisioningService provisioningService;
     private final FolderService folderService;
@@ -115,6 +121,20 @@ public class FileService {
                 """,
                 file.id(),
                 user.id());
+        deleteStoredBytesAfterCommit(file);
+    }
+
+    private void deleteStoredBytesAfterCommit(FileRecord file) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                try {
+                    localStorageService.deleteStorageKey(file.storageKey());
+                } catch (IOException ex) {
+                    log.warn("Unable to delete stored bytes for file {} at {}", file.id(), file.storageKey(), ex);
+                }
+            }
+        });
     }
 
     private FileRecord requireOwnedActiveFile(UserRecord user, UUID fileId) {

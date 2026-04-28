@@ -45,6 +45,26 @@ public class LocalStorageService {
         return path;
     }
 
+    public void deleteStorageKey(String storageKey) throws IOException {
+        Path path = resolveStorageKey(storageKey);
+        Files.deleteIfExists(path);
+        pruneEmptyParents(path.getParent());
+    }
+
+    private void pruneEmptyParents(Path start) throws IOException {
+        Path current = start;
+        while (current != null && !current.equals(storageRoot) && current.startsWith(storageRoot)) {
+            try {
+                Files.delete(current);
+            } catch (java.nio.file.DirectoryNotEmptyException ex) {
+                return;
+            } catch (java.nio.file.NoSuchFileException ex) {
+                // Continue upward; another delete may have already removed this directory.
+            }
+            current = current.getParent();
+        }
+    }
+
     private MessageDigest sha256Digest() {
         try {
             return MessageDigest.getInstance("SHA-256");
