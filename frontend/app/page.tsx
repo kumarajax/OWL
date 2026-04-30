@@ -264,6 +264,8 @@ export default function Home() {
   const [currentFolder, setCurrentFolder] = useState<FolderRecord | null>(null);
   const [children, setChildren] = useState<DriveItem[]>([]);
   const [breadcrumbs, setBreadcrumbs] = useState<FolderRecord[]>([]);
+  const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
+  const [batchMoveTargetId, setBatchMoveTargetId] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -320,6 +322,8 @@ export default function Home() {
     setCurrentFolder(null);
     setBreadcrumbs([]);
     setChildren([]);
+    setSelectedFileIds(new Set());
+    setBatchMoveTargetId("");
     setLoading(false);
     setUploading(false);
     setDeactivationDialogOpen(false);
@@ -390,6 +394,8 @@ export default function Home() {
       try {
         const response = await fetch(`${apiBaseUrl}/api/folders/${folder.id}/children`, { headers: jsonHeaders });
         setChildren(await readJson<DriveItem[]>(response));
+        setSelectedFileIds(new Set());
+        setBatchMoveTargetId("");
       } catch (err) {
         handleRequestError(err, "Unable to load folder contents");
       } finally {
@@ -413,6 +419,8 @@ export default function Home() {
     setCurrentFolder(root);
     setBreadcrumbs([root]);
     setChildren(rootChildren);
+    setSelectedFileIds(new Set());
+    setBatchMoveTargetId("");
   }
 
   async function loadStorage(headers: Record<string, string>) {
@@ -703,6 +711,80 @@ export default function Home() {
     }
   }
 
+  function toggleFileSelection(fileId: string) {
+    setSelectedFileIds((current) => {
+      const next = new Set(current);
+      if (next.has(fileId)) {
+        next.delete(fileId);
+      } else {
+        next.add(fileId);
+      }
+      return next;
+    });
+  }
+
+  function toggleAllFiles() {
+    const fileIds = children.filter((item) => item.itemType === "file").map((item) => item.id);
+    setSelectedFileIds((current) => {
+      if (fileIds.length > 0 && fileIds.every((id) => current.has(id))) {
+        return new Set();
+      }
+      return new Set(fileIds);
+    });
+  }
+
+  async function downloadSelectedFiles() {
+    const selectedFiles = children.filter((item) => item.itemType === "file" && selectedFileIds.has(item.id));
+    for (const file of selectedFiles) {
+      await downloadFile(file);
+    }
+  }
+
+  async function deleteSelectedFiles() {
+    if (!jsonHeaders || !currentFolder || selectedFileIds.size === 0) return;
+    const confirmed = window.confirm(`Delete ${selectedFileIds.size} selected file${selectedFileIds.size === 1 ? "" : "s"}?`);
+    if (!confirmed) return;
+    setLoading(true);
+    setError("");
+    try {
+      for (const fileId of selectedFileIds) {
+        const response = await fetch(`${apiBaseUrl}/api/files/${fileId}`, {
+          method: "DELETE",
+          headers: jsonHeaders
+        });
+        if (!response.ok) await readJson(response);
+      }
+      setSelectedFileIds(new Set());
+      await loadChildren(currentFolder);
+      await refreshStorage();
+    } catch (err) {
+      handleRequestError(err, "Unable to delete selected files");
+      setLoading(false);
+    }
+  }
+
+  async function moveSelectedFiles() {
+    if (!jsonHeaders || !currentFolder || !batchMoveTargetId || selectedFileIds.size === 0) return;
+    setLoading(true);
+    setError("");
+    try {
+      for (const fileId of selectedFileIds) {
+        const response = await fetch(`${apiBaseUrl}/api/files/${fileId}`, {
+          method: "PATCH",
+          headers: jsonHeaders,
+          body: JSON.stringify({ parentFolderId: batchMoveTargetId })
+        });
+        await readJson<DriveItem>(response);
+      }
+      setSelectedFileIds(new Set());
+      setBatchMoveTargetId("");
+      await loadChildren(currentFolder);
+    } catch (err) {
+      handleRequestError(err, "Unable to move selected files");
+      setLoading(false);
+    }
+  }
+
   async function deleteFile(item: DriveItem) {
     if (!jsonHeaders || !currentFolder) return;
     const confirmed = window.confirm(`Delete "${item.name}"?`);
@@ -760,6 +842,12 @@ export default function Home() {
   const parentFolder = breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2] : null;
   const accountDeactivated = Boolean(user?.deactivatedAt);
   const registrationFull = registrationStatus ? !registrationStatus.registrationAvailable : false;
+  const visibleFileIds = children.filter((item) => item.itemType === "file").map((item) => item.id);
+  const allVisibleFilesSelected = visibleFileIds.length > 0 && visibleFileIds.every((id) => selectedFileIds.has(id));
+  const moveTargets = [
+    ...(parentFolder ? [{ id: parentFolder.id, name: `Parent: ${parentFolder.name}` }] : []),
+    ...children.filter((item) => item.itemType === "folder").map((item) => ({ id: item.id, name: item.name }))
+  ];
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
@@ -1038,8 +1126,66 @@ export default function Home() {
 
             {error ? <p className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-red-700">{error}</p> : null}
 
+            {selectedFileIds.size > 0 ? (
+              <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-white p-3 text-sm shadow-sm">
+                <span className="font-semibold text-slate-700">
+                  {selectedFileIds.size} selected
+                </span>
+                <button
+                  type="button"
+                  onClick={downloadSelectedFiles}
+                  disabled={loading || uploading}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 font-semibold disabled:opacity-50"
+                >
+                  <Download className="h-4 w-4" />
+                  Download
+                </button>
+                <select
+                  value={batchMoveTargetId}
+                  onChange={(event) => setBatchMoveTargetId(event.target.value)}
+                  disabled={loading || uploading || moveTargets.length === 0}
+                  className="h-9 min-w-44 rounded-md border border-slate-300 bg-white px-3 font-medium disabled:opacity-50"
+                >
+                  <option value="">Move to...</option>
+                  {moveTargets.map((target) => (
+                    <option key={target.id} value={target.id}>
+                      {target.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={moveSelectedFiles}
+                  disabled={loading || uploading || !batchMoveTargetId}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 font-semibold disabled:opacity-50"
+                >
+                  <Folder className="h-4 w-4" />
+                  Move
+                </button>
+                <button
+                  type="button"
+                  onClick={deleteSelectedFiles}
+                  disabled={loading || uploading}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 bg-white px-3 font-semibold text-red-700 disabled:opacity-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete
+                </button>
+              </div>
+            ) : null}
+
             <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-              <div className="grid grid-cols-[minmax(0,1fr)_120px_160px_auto] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-600">
+              <div className="grid grid-cols-[44px_minmax(0,1fr)_120px_160px_auto] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-600">
+                <div className="flex items-center justify-center">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleFilesSelected}
+                    onChange={toggleAllFiles}
+                    disabled={visibleFileIds.length === 0}
+                    aria-label="Select all files"
+                    className="h-4 w-4"
+                  />
+                </div>
                 <div>Name</div>
                 <div>Size</div>
                 <div>Modified</div>
@@ -1051,8 +1197,19 @@ export default function Home() {
                 children.map((item) => (
                   <div
                     key={`${item.itemType}-${item.id}`}
-                    className="grid grid-cols-[minmax(0,1fr)_120px_160px_auto] items-center gap-3 border-b border-slate-100 px-4 py-2 text-sm last:border-b-0 hover:bg-slate-50"
+                    className="grid grid-cols-[44px_minmax(0,1fr)_120px_160px_auto] items-center gap-3 border-b border-slate-100 px-4 py-2 text-sm last:border-b-0 hover:bg-slate-50"
                   >
+                    <div className="flex items-center justify-center">
+                      {item.itemType === "file" ? (
+                        <input
+                          type="checkbox"
+                          checked={selectedFileIds.has(item.id)}
+                          onChange={() => toggleFileSelection(item.id)}
+                          aria-label={`Select ${item.name}`}
+                          className="h-4 w-4"
+                        />
+                      ) : null}
+                    </div>
                     {item.itemType === "folder" ? (
                       <button onClick={() => openFolder(itemToFolder(item))} className="flex min-w-0 items-center gap-3 rounded-md py-2 text-left">
                         <Folder className="h-5 w-5 shrink-0 text-blue-600" />

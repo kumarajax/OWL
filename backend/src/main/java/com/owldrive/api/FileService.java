@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.InputStreamResource;
@@ -111,6 +112,42 @@ public class FileService {
             return new DownloadableFile(file, new InputStreamResource(Files.newInputStream(path)), Files.size(path));
         } catch (IOException ex) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to read file", ex);
+        }
+    }
+
+    @Transactional
+    public FileRecord update(Jwt jwt, UUID fileId, Map<String, Object> request) {
+        UserRecord user = provisioningService.ensureUser(jwt);
+        FileRecord file = requireOwnedActiveFile(user, fileId);
+        if (request == null || !request.containsKey("parentFolderId")) {
+            throw badRequest("parentFolderId is required");
+        }
+        Object rawParentFolderId = request.get("parentFolderId");
+        if (!(rawParentFolderId instanceof String value) || value.isBlank()) {
+            throw badRequest("parentFolderId must be a UUID string");
+        }
+        UUID parentFolderId = parseUuid(value, "parentFolderId");
+        FolderRecord parent = folderService.requireOwnedActiveFolder(user, parentFolderId);
+        if (file.parentFolderId().equals(parent.id())) {
+            return file;
+        }
+        rejectDuplicateFileName(user.id(), parent.id(), file.originalName());
+        try {
+            return jdbc.queryForObject(
+                    """
+                    UPDATE files
+                    SET parent_folder_id = ?, updated_at = now()
+                    WHERE id = ? AND owner_id = ? AND deleted_at IS NULL
+                    RETURNING id, owner_id, parent_folder_id, original_name, storage_key,
+                              content_type, size_bytes, checksum_sha256,
+                              created_at, updated_at, deleted_at
+                    """,
+                    this::mapFile,
+                    parent.id(),
+                    file.id(),
+                    user.id());
+        } catch (DataIntegrityViolationException ex) {
+            throw badRequest("A file with this name already exists there");
         }
     }
 
@@ -250,6 +287,14 @@ public class FileService {
     private String contentType(MultipartFile upload) {
         String contentType = upload.getContentType();
         return contentType == null || contentType.isBlank() ? "application/octet-stream" : contentType;
+    }
+
+    private UUID parseUuid(String value, String fieldName) {
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException ex) {
+            throw badRequest(fieldName + " must be a UUID string");
+        }
     }
 
     private ResponseStatusException badRequest(String message) {
