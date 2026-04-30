@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ChevronRight,
@@ -8,7 +8,6 @@ import {
   FileText,
   Folder,
   HardDrive,
-  LogIn,
   LogOut,
   Pencil,
   Plus,
@@ -256,6 +255,9 @@ function resolveServiceBaseUrl(envValue: string | undefined, port: number) {
 export default function Home() {
   const [token, setToken] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginSubmitting, setLoginSubmitting] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [rootFolder, setRootFolder] = useState<FolderRecord | null>(null);
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
@@ -487,6 +489,52 @@ export default function Home() {
       code_challenge_method: "S256"
     });
     window.location.href = `${keycloakBaseUrl}/realms/${realm}/protocol/openid-connect/registrations?${params}`;
+  }
+
+  async function loginWithPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!loginUsername.trim() || !loginPassword) {
+      setError("Username and password are required.");
+      return;
+    }
+
+    setLoginSubmitting(true);
+    setLoading(true);
+    setError("");
+    try {
+      const body = new URLSearchParams({
+        grant_type: "password",
+        client_id: clientId,
+        username: loginUsername.trim(),
+        password: loginPassword,
+        scope: "openid email profile"
+      });
+      const response = await fetch(`${keycloakBaseUrl}/realms/${realm}/protocol/openid-connect/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body
+      });
+      if (!response.ok) {
+        let message = "Invalid username or password.";
+        try {
+          const data = await response.json();
+          message = data.error_description || data.error || message;
+        } catch {
+          // Keep the default login error.
+        }
+        throw new Error(message);
+      }
+      const data = await response.json();
+      localStorage.setItem("owl_access_token", data.access_token);
+      if (data.id_token) localStorage.setItem("owl_id_token", data.id_token);
+      setLoginPassword("");
+      setToken(data.access_token);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Login failed.");
+    } finally {
+      setLoginSubmitting(false);
+      setLoading(false);
+    }
   }
 
   function logout() {
@@ -787,85 +835,52 @@ export default function Home() {
       {!token ? (
         <section className="mx-auto max-w-3xl px-6 py-12">
           <div className="rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
-            <h1 className="text-2xl font-semibold">Sign in to OWL Drive</h1>
-            <p className="mt-2 text-slate-600">Use Keycloak OpenID Connect to access your drive.</p>
-
-            <div className="mt-6 grid grid-cols-2 rounded-md border border-slate-200 p-1">
+            <h1 className="text-2xl font-semibold">OWL Drive</h1>
+            <form className="mt-6 space-y-4" onSubmit={loginWithPassword}>
+              <div>
+                <label className="block text-sm font-medium text-slate-700" htmlFor="owl-username">
+                  Username
+                </label>
+                <input
+                  id="owl-username"
+                  value={loginUsername}
+                  onChange={(event) => setLoginUsername(event.target.value)}
+                  className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  autoComplete="username"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700" htmlFor="owl-password">
+                  Password
+                </label>
+                <input
+                  id="owl-password"
+                  type="password"
+                  value={loginPassword}
+                  onChange={(event) => setLoginPassword(event.target.value)}
+                  className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  autoComplete="current-password"
+                />
+              </div>
               <button
-                type="button"
-                onClick={() => {
-                  setAuthMode("login");
-                  setError("");
-                }}
-                className={`rounded-md px-3 py-2 text-sm font-semibold ${
-                  authMode === "login" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
-                }`}
+                type="submit"
+                disabled={loginSubmitting || loading}
+                className="inline-flex h-11 w-full items-center justify-center rounded-md bg-blue-600 px-5 font-semibold text-white disabled:opacity-50"
               >
-                Sign in
+                {loginSubmitting ? "Logging in" : "Login"}
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (registrationFull) return;
-                  setAuthMode("register");
-                  setError("");
-                }}
-                disabled={registrationFull}
-                className={`rounded-md px-3 py-2 text-sm font-semibold ${
-                  authMode === "register"
-                    ? "bg-slate-900 text-white"
-                    : registrationFull
-                      ? "cursor-not-allowed text-slate-400"
-                      : "text-slate-600 hover:bg-slate-100"
-                }`}
-              >
-                Create account
-              </button>
-            </div>
-
+            </form>
             {registrationFull ? (
               <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">Max usage reached.</p>
-            ) : null}
-
-            {authMode === "login" ? (
-              <>
-                <button onClick={() => login()} className="mt-6 inline-flex h-11 items-center gap-2 rounded-md bg-blue-600 px-5 font-semibold text-white">
-                  <LogIn className="h-4 w-4" />
-                  Login with Keycloak
-                </button>
-                {!registrationFull ? (
-                  <p className="mt-4 text-sm text-slate-600">
-                    New users can create an account here. The email becomes the username.
-                  </p>
-                ) : null}
-              </>
             ) : (
-              <div className="mt-6 space-y-4">
-                <p className="text-sm text-slate-600">
-                  Keycloak will ask for the email and password during registration. The email is used as the username.
-                </p>
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => registerAccount()}
-                    disabled={registrationFull}
-                    className="inline-flex h-11 items-center gap-2 rounded-md bg-blue-600 px-5 font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-                  >
-                    <Plus className="h-4 w-4" />
-                    Create account
-                  </button>
-                  <button
-                    type="button"
-                  onClick={() => {
-                    setAuthMode("login");
-                    setError("");
-                  }}
-                  className="inline-flex h-11 items-center rounded-md border border-slate-300 bg-white px-4 font-semibold"
-                >
-                    Back to sign in
-                  </button>
-                </div>
-              </div>
+              <button
+                type="button"
+                onClick={() => registerAccount()}
+                className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-5 font-semibold text-slate-800"
+              >
+                <Plus className="h-4 w-4" />
+                Create account
+              </button>
             )}
           </div>
           {error ? <p className="mt-5 rounded-md border border-red-200 bg-red-50 p-3 text-red-700">{error}</p> : null}

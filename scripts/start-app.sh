@@ -22,6 +22,8 @@ export APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUER_PATTERNS="${APP_SECURITY_OAUTH2_JW
 export APP_SECURITY_OAUTH2_JWT_JWK_SET_URI="${APP_SECURITY_OAUTH2_JWT_JWK_SET_URI:-${KEYCLOAK_INTERNAL_URL}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/certs}"
 export OWL_NEXT_ALLOWED_DEV_ORIGINS="${OWL_NEXT_ALLOWED_DEV_ORIGINS:-127.0.0.1,*.local,192.168.*.*,10.*.*.*,172.*.*.*,$OWL_HOST_IP_DETECTED}"
 
+"$ROOT_DIR/scripts/configure-keycloak-client.sh"
+
 if [ -f "$RUN_DIR/backend.pid" ] && kill -0 "$(cat "$RUN_DIR/backend.pid")" 2>/dev/null; then
   echo "Backend already running with PID $(cat "$RUN_DIR/backend.pid")"
 else
