@@ -8,6 +8,7 @@ import {
   FileText,
   Folder,
   HardDrive,
+  Linkedin,
   LogOut,
   Pencil,
   Plus,
@@ -65,6 +66,7 @@ type DriveItem = {
 
 const realm = process.env.NEXT_PUBLIC_KEYCLOAK_REALM ?? "owldrive";
 const clientId = process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID ?? "owl-drive-web";
+const linkedInProfileUrl = "https://www.linkedin.com/in/ajaykumarpandit/";
 
 class AuthExpiredError extends Error {
   constructor() {
@@ -970,6 +972,15 @@ export default function Home() {
                 Create account
               </button>
             )}
+            <a
+              href={linkedInProfileUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              <Linkedin className="h-4 w-4 text-blue-700" />
+              Ajay Kumar Pandit on LinkedIn
+            </a>
           </div>
           {error ? <p className="mt-5 rounded-md border border-red-200 bg-red-50 p-3 text-red-700">{error}</p> : null}
         </section>
@@ -1270,6 +1281,15 @@ export default function Home() {
               </>
             )}
           </section>
+          <a
+            href={linkedInProfileUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="fixed bottom-4 right-4 z-40 inline-flex h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            <Linkedin className="h-4 w-4 text-blue-700" />
+            LinkedIn
+          </a>
         </div>
       )}
     </main>
