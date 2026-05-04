@@ -13,6 +13,10 @@
         "description": "OWL Drive administrator"
       },
       {
+        "name": "operations",
+        "description": "OWL Drive telemetry operator"
+      },
+      {
         "name": "user",
         "description": "OWL Drive regular user"
       }

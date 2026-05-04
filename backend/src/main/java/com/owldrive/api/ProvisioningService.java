@@ -210,11 +210,14 @@ public class ProvisioningService {
         if (realmAccess instanceof Map<?, ?> access) {
             Object roles = access.get("roles");
             if (roles instanceof Collection<?> values) {
-                boolean admin = values.stream()
-                        .map(String::valueOf)
-                        .anyMatch(role -> role.equalsIgnoreCase("admin"));
+                var roleNames = values.stream().map(String::valueOf).toList();
+                boolean admin = roleNames.stream().anyMatch(role -> role.equalsIgnoreCase("admin"));
                 if (admin) {
                     return "ADMIN";
+                }
+                boolean operations = roleNames.stream().anyMatch(role -> role.equalsIgnoreCase("operations"));
+                if (operations) {
+                    return "OPERATIONS";
                 }
             }
         }

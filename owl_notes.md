@@ -28,21 +28,21 @@
 
   UPDATE app.users
   SET quota_bytes = 10737418240
-  WHERE username = 'testuser'
+  WHERE username = '<local-username>'
     AND role = 'USER';
 
   Set to 50 GB:
 
   UPDATE app.users
   SET quota_bytes = 53687091200
-  WHERE username = 'testuser'
+  WHERE username = '<local-username>'
     AND role = 'USER';
 
   Verify:
 
   SELECT username, role, quota_bytes, used_bytes
   FROM app.users
-  WHERE username = 'testuser';
+  WHERE username = '<local-username>';
 
   Notes:
 
@@ -86,10 +86,8 @@
 
   http://localhost:3000
 
-  Login:
-
-  username: testuser
-  password: TestPassword123!
+  Create a user from the OWL Drive login page, or create one in the
+  Keycloak admin console, then log in with that local test account.
 
 
 
@@ -156,14 +154,12 @@
 
   Login with Keycloak
 
-  Login using:
-
-  username: testuser
-  password: TestPassword123!
+  Create a user from the OWL Drive login page, or create one in the
+  Keycloak admin console, then log in with that local test account.
 
   Expected screen after login:
 
-  Signed in as testuser@example.com
+  Signed in as <local-email>
   My Drive
   Root folder ID: <uuid>
 

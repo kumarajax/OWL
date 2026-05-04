@@ -2,6 +2,7 @@
 
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
   ArrowLeft,
   ChevronRight,
   Copy,
@@ -32,7 +33,7 @@ type User = {
 };
 
 type StorageInfo = {
-  role: "ADMIN" | "USER";
+  role: "ADMIN" | "OPERATIONS" | "USER";
   quotaBytes: number | null;
   usedBytes: number;
   isUnlimited: boolean;
@@ -78,6 +79,29 @@ type FileShare = {
   lastDownloadedAt: string | null;
   createdAt: string;
 };
+
+type AccessLog = {
+  id: string;
+  userId: string | null;
+  keycloakId: string | null;
+  email: string | null;
+  ipAddress: string | null;
+  country: string | null;
+  region: string | null;
+  city: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  locationSource: string | null;
+  userAgent: string | null;
+  method: string;
+  path: string;
+  statusCode: number | null;
+  durationMs: number;
+  eventType: string;
+  createdAt: string;
+};
+
+type AccessLogSortKey = "createdAt" | "email" | "ipAddress" | "location" | "method" | "path" | "statusCode" | "durationMs" | "eventType";
 
 const realm = process.env.NEXT_PUBLIC_KEYCLOAK_REALM ?? "owldrive";
 const clientId = process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID ?? "owl-drive-web";
@@ -246,6 +270,10 @@ function formatDate(value: string) {
   return dateFormatter.format(new Date(value));
 }
 
+function formatLocation(log: AccessLog) {
+  return [log.city, log.region, log.country].filter(Boolean).join(", ") || "";
+}
+
 function getBrowserOrigin() {
   return typeof window === "undefined" ? "" : window.location.origin;
 }
@@ -298,6 +326,10 @@ export default function Home() {
   const [registrationStatus, setRegistrationStatus] = useState<RegistrationStatus | null>(null);
   const [shareDialogUrl, setShareDialogUrl] = useState("");
   const [shareCopied, setShareCopied] = useState(false);
+  const [activeView, setActiveView] = useState<"drive" | "telemetry">("drive");
+  const [accessLogs, setAccessLogs] = useState<AccessLog[]>([]);
+  const [accessLogSortKey, setAccessLogSortKey] = useState<AccessLogSortKey>("createdAt");
+  const [accessLogSortDirection, setAccessLogSortDirection] = useState<"asc" | "desc">("desc");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const shareLinkInputRef = useRef<HTMLInputElement | null>(null);
   const keycloakBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_KEYCLOAK_URL, 8080);
@@ -654,6 +686,7 @@ export default function Home() {
   }
 
   async function openFolder(folder: FolderRecord) {
+    setActiveView("drive");
     setCurrentFolder(folder);
     setBreadcrumbs((items) => {
       const existingIndex = items.findIndex((item) => item.id === folder.id);
@@ -917,6 +950,30 @@ export default function Home() {
     }
   }
 
+  async function loadTelemetry() {
+    if (!jsonHeaders) return;
+    setActiveView("telemetry");
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/admin/access-logs?limit=200`, { headers: jsonHeaders });
+      setAccessLogs(await readJson<AccessLog[]>(response));
+    } catch (err) {
+      handleRequestError(err, "Unable to load telemetry");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function sortAccessLogs(key: AccessLogSortKey) {
+    if (accessLogSortKey === key) {
+      setAccessLogSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setAccessLogSortKey(key);
+    setAccessLogSortDirection(key === "createdAt" ? "desc" : "asc");
+  }
+
   async function deactivateAccount() {
     if (!jsonHeaders || !user) return;
     const typedEmail = deactivationConfirmation.trim();
@@ -960,6 +1017,19 @@ export default function Home() {
     ...(parentFolder ? [{ id: parentFolder.id, name: `Parent: ${parentFolder.name}` }] : []),
     ...children.filter((item) => item.itemType === "folder").map((item) => ({ id: item.id, name: item.name }))
   ];
+  const canViewTelemetry = user?.role === "ADMIN" || user?.role === "OPERATIONS";
+  const sortedAccessLogs = [...accessLogs].sort((left, right) => {
+    const value = (log: AccessLog) => {
+      if (accessLogSortKey === "location") return formatLocation(log);
+      return log[accessLogSortKey] ?? "";
+    };
+    const leftValue = value(left);
+    const rightValue = value(right);
+    const comparison = typeof leftValue === "number" && typeof rightValue === "number"
+      ? leftValue - rightValue
+      : String(leftValue).localeCompare(String(rightValue));
+    return accessLogSortDirection === "asc" ? comparison : -comparison;
+  });
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
@@ -1232,11 +1302,25 @@ export default function Home() {
           <aside className="hidden w-64 border-r border-slate-200 bg-white px-4 py-5 md:block">
             <button
               onClick={() => rootFolder && openFolder(rootFolder)}
-              className="flex w-full items-center gap-3 rounded-md bg-blue-50 px-3 py-2 text-left font-semibold text-blue-700"
+              className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left font-semibold ${
+                activeView === "drive" ? "bg-blue-50 text-blue-700" : "text-slate-700 hover:bg-slate-50"
+              }`}
             >
               <HardDrive className="h-4 w-4" />
               My Drive
             </button>
+            {canViewTelemetry ? (
+              <button
+                type="button"
+                onClick={loadTelemetry}
+                className={`mt-2 flex w-full items-center gap-3 rounded-md px-3 py-2 text-left font-semibold ${
+                  activeView === "telemetry" ? "bg-blue-50 text-blue-700" : "text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                <Activity className="h-4 w-4" />
+                Telemetry
+              </button>
+            ) : null}
             <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
               <div className="font-semibold text-slate-700">{user?.role ?? storageInfo?.role ?? "USER"}</div>
               <div className="mt-1 text-slate-600">{accountDeactivated ? "Account deactivated" : formatStorage(storageInfo)}</div>
@@ -1246,6 +1330,16 @@ export default function Home() {
                 <UserCircle className="h-4 w-4 shrink-0" />
                 <span className="truncate font-medium">{user?.email || user?.username}</span>
               </div>
+              {canViewTelemetry ? (
+                <button
+                  type="button"
+                  onClick={loadTelemetry}
+                  className="inline-flex h-10 shrink-0 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 font-semibold text-slate-800 disabled:opacity-50"
+                >
+                  <Activity className="h-4 w-4" />
+                  Telemetry
+                </button>
+              ) : null}
               {accountDeactivated ? (
                 <button
                   type="button"
@@ -1321,7 +1415,83 @@ export default function Home() {
               )}
             </div>
 
-            {accountDeactivated ? (
+            {activeView === "telemetry" ? (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h1 className="text-xl font-semibold text-slate-900">Telemetry</h1>
+                    <p className="mt-1 text-sm text-slate-600">Recent access logs for OWL Drive API requests.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={loadTelemetry}
+                    disabled={loading}
+                    className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 font-semibold disabled:opacity-50"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                    Refresh
+                  </button>
+                </div>
+
+                {error ? <p className="rounded-md border border-red-200 bg-red-50 p-3 text-red-700">{error}</p> : null}
+
+                <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
+                  <table className="min-w-[1180px] w-full border-collapse text-left text-sm">
+                    <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      <tr>
+                        {[
+                          ["createdAt", "Time"],
+                          ["email", "User"],
+                          ["ipAddress", "IP"],
+                          ["location", "Location"],
+                          ["method", "Method"],
+                          ["path", "Path"],
+                          ["statusCode", "Status"],
+                          ["durationMs", "Duration"],
+                          ["eventType", "Event"]
+                        ].map(([key, label]) => (
+                          <th key={key} className="border-b border-slate-200 px-3 py-3">
+                            <button
+                              type="button"
+                              onClick={() => sortAccessLogs(key as AccessLogSortKey)}
+                              className="inline-flex items-center gap-1 hover:text-blue-700"
+                            >
+                              {label}
+                              <span className="text-slate-400">
+                                {accessLogSortKey === key ? (accessLogSortDirection === "asc" ? "up" : "down") : ""}
+                              </span>
+                            </button>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedAccessLogs.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="px-3 py-10 text-center text-slate-500">
+                            {loading ? "Loading telemetry..." : "No telemetry logs yet"}
+                          </td>
+                        </tr>
+                      ) : (
+                        sortedAccessLogs.map((log) => (
+                          <tr key={log.id} className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50">
+                            <td className="whitespace-nowrap px-3 py-2 text-slate-700">{formatDate(log.createdAt)}</td>
+                            <td className="max-w-56 truncate px-3 py-2 font-medium text-slate-800">{log.email || log.keycloakId || "Anonymous"}</td>
+                            <td className="whitespace-nowrap px-3 py-2 text-slate-700">{log.ipAddress || ""}</td>
+                            <td className="max-w-56 truncate px-3 py-2 text-slate-700">{formatLocation(log)}</td>
+                            <td className="whitespace-nowrap px-3 py-2 font-semibold text-slate-700">{log.method}</td>
+                            <td className="max-w-96 truncate px-3 py-2 text-slate-700" title={log.path}>{log.path}</td>
+                            <td className="whitespace-nowrap px-3 py-2 text-slate-700">{log.statusCode ?? ""}</td>
+                            <td className="whitespace-nowrap px-3 py-2 text-slate-700">{log.durationMs} ms</td>
+                            <td className="whitespace-nowrap px-3 py-2 text-slate-700">{log.eventType}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : accountDeactivated ? (
               <div className="rounded-lg border border-green-200 bg-white p-6 shadow-sm">
                 <div className="flex items-start gap-3">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-green-50 text-green-700">
