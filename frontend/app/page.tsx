@@ -9,6 +9,7 @@ import {
   FileText,
   Folder,
   HardDrive,
+  KeyRound,
   Linkedin,
   LogOut,
   Pencil,
@@ -289,6 +290,11 @@ export default function Home() {
   const [deactivationConfirmation, setDeactivationConfirmation] = useState("");
   const [deactivating, setDeactivating] = useState(false);
   const [activating, setActivating] = useState(false);
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
   const [registrationStatus, setRegistrationStatus] = useState<RegistrationStatus | null>(null);
   const [shareDialogUrl, setShareDialogUrl] = useState("");
   const [shareCopied, setShareCopied] = useState(false);
@@ -580,6 +586,49 @@ export default function Home() {
     setError("");
     setDeactivationConfirmation("");
     setDeactivationDialogOpen(true);
+  }
+
+  function openPasswordDialog() {
+    setError("");
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmNewPassword("");
+    setPasswordDialogOpen(true);
+  }
+
+  async function changePassword() {
+    if (!jsonHeaders) return;
+    if (!currentPassword || !newPassword || !confirmNewPassword) {
+      setError("All password fields are required.");
+      return;
+    }
+    if (newPassword.length < 8) {
+      setError("New password must be at least 8 characters.");
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setError("New password and confirmation do not match.");
+      return;
+    }
+    setChangingPassword(true);
+    setError("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/me/password`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ currentPassword, newPassword })
+      });
+      if (!response.ok) await readJson(response);
+      setPasswordDialogOpen(false);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      setError("Password updated.");
+    } catch (err) {
+      handleRequestError(err, "Unable to update password");
+    } finally {
+      setChangingPassword(false);
+    }
   }
 
   async function activateAccount() {
@@ -1035,6 +1084,87 @@ export default function Home() {
         </div>
       ) : null}
 
+      {passwordDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-5 shadow-xl">
+            <div className="flex items-start gap-3">
+              <div className="mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-700">
+                <KeyRound className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-lg font-semibold text-slate-900">Reset password</h2>
+                <p className="mt-1 text-sm text-slate-600">Update the password for your OWL Drive login.</p>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700" htmlFor="current-password">
+                  Current password
+                </label>
+                <input
+                  id="current-password"
+                  type="password"
+                  value={currentPassword}
+                  onChange={(event) => setCurrentPassword(event.target.value)}
+                  disabled={changingPassword}
+                  className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
+                  autoComplete="current-password"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700" htmlFor="new-password">
+                  New password
+                </label>
+                <input
+                  id="new-password"
+                  type="password"
+                  value={newPassword}
+                  onChange={(event) => setNewPassword(event.target.value)}
+                  disabled={changingPassword}
+                  className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
+                  autoComplete="new-password"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700" htmlFor="confirm-new-password">
+                  Confirm new password
+                </label>
+                <input
+                  id="confirm-new-password"
+                  type="password"
+                  value={confirmNewPassword}
+                  onChange={(event) => setConfirmNewPassword(event.target.value)}
+                  disabled={changingPassword}
+                  className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
+                  autoComplete="new-password"
+                />
+              </div>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPasswordDialogOpen(false)}
+                disabled={changingPassword}
+                className="inline-flex h-10 items-center rounded-md border border-slate-300 bg-white px-4 font-semibold disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={changePassword}
+                disabled={changingPassword || !currentPassword || !newPassword || !confirmNewPassword}
+                className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-600 px-4 font-semibold text-white disabled:opacity-50"
+              >
+                <KeyRound className="h-4 w-4" />
+                {changingPassword ? "Updating" : "Update password"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {!token ? (
         <section className="mx-auto max-w-3xl px-6 py-12">
           <div className="rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
@@ -1127,15 +1257,26 @@ export default function Home() {
                   Activate account
                 </button>
               ) : (
-                <button
-                  type="button"
-                  onClick={openDeactivateAccountDialog}
-                  disabled={loading || uploading}
-                  className="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border border-red-200 bg-white px-3 font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Deactivate account
-                </button>
+                <div className="mt-3 space-y-2">
+                  <button
+                    type="button"
+                    onClick={openPasswordDialog}
+                    disabled={loading || uploading}
+                    className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    <KeyRound className="h-4 w-4" />
+                    Reset password
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openDeactivateAccountDialog}
+                    disabled={loading || uploading}
+                    className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border border-red-200 bg-white px-3 font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Deactivate account
+                  </button>
+                </div>
               )}
             </div>
           </aside>
@@ -1157,15 +1298,26 @@ export default function Home() {
                   Activate
                 </button>
               ) : (
-                <button
-                  type="button"
-                  onClick={openDeactivateAccountDialog}
-                  disabled={loading || uploading}
-                  className="inline-flex h-10 shrink-0 items-center gap-2 rounded-md border border-red-200 bg-white px-3 font-semibold text-red-700 disabled:opacity-50"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Deactivate
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={openPasswordDialog}
+                    disabled={loading || uploading}
+                    className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-3 font-semibold disabled:opacity-50"
+                    title="Reset password"
+                  >
+                    <KeyRound className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openDeactivateAccountDialog}
+                    disabled={loading || uploading}
+                    className="inline-flex h-10 shrink-0 items-center gap-2 rounded-md border border-red-200 bg-white px-3 font-semibold text-red-700 disabled:opacity-50"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Deactivate
+                  </button>
+                </div>
               )}
             </div>
 

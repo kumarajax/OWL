@@ -44,4 +44,10 @@ public class MeController {
     UserRecord activate(@AuthenticationPrincipal Jwt jwt) {
         return accountService.activate(jwt);
     }
+
+    @PostMapping("/me/password")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void changePassword(@AuthenticationPrincipal Jwt jwt, @RequestBody ChangePasswordRequest request) {
+        accountService.changePassword(jwt, request);
+    }
 }
