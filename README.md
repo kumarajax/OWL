@@ -27,21 +27,20 @@ Not included:
 - Frontend: `http://localhost:3000`
 - PostgreSQL: `localhost:5432`
 
-Seeded Keycloak user:
+The Keycloak realm import seeds local-only test users. Both use a temporary
+password and should be changed immediately after first login.
 
 ```text
 username: testuser
-password: TestPassword123!
+password: Changeme
 email: testuser@example.com
 role: user
 quota: 2 GB
 ```
 
-Seeded Keycloak admin user:
-
 ```text
 username: adminuser
-password: AdminPassword123!
+password: Changeme
 email: adminuser@example.com
 role: admin
 quota: unlimited
@@ -189,7 +188,7 @@ When active users reach this limit, the frontend disables account creation and t
 2. Start backend.
 3. Start frontend.
 4. Open `http://localhost:3000`.
-5. Login as `testuser`.
+5. Create an account or login with an account created in Keycloak.
 6. Confirm the sidebar shows `USER` and `0 B of 2.0 GB used`.
 7. Open `My Drive`.
 8. Create a folder.
@@ -220,7 +219,7 @@ On Windows, run the commands from Git Bash or WSL, and use Docker Desktop so `do
 The initial clone/import failed because:
 
 - `scripts/start-app.sh` used `setsid`, which is not portable on macOS.
-- `infra/keycloak/realm-export.json` seeded two users with the same email, so Keycloak refused to import the realm.
+- `infra/keycloak/realm-export.json` previously seeded reusable test passwords. The seeded users now use temporary `Changeme` credentials for local setup.
 - Backend CORS and Keycloak redirect settings only allowed `http://localhost:3000`, not `http://127.0.0.1:3000`.
 - The Next dev server needed an explicit local allowed-origin entry when accessed through `127.0.0.1`.
 
@@ -231,12 +230,14 @@ Those issues are fixed in the current local tree.
 Get a token:
 
 ```bash
+OWL_USERNAME='testuser'
+OWL_PASSWORD='Changeme'
 TOKEN=$(curl -s -X POST http://localhost:8080/realms/owldrive/protocol/openid-connect/token \
   -H 'Content-Type: application/x-www-form-urlencoded' \
   -d 'grant_type=password' \
   -d 'client_id=owl-drive-web' \
-  -d 'username=testuser' \
-  -d 'password=TestPassword123!' \
+  -d "username=$OWL_USERNAME" \
+  -d "password=$OWL_PASSWORD" \
   | node -pe "JSON.parse(require('fs').readFileSync(0, 'utf8')).access_token")
 ```
 
@@ -260,12 +261,14 @@ Expected:
 Verify admin storage:
 
 ```bash
+OWL_ADMIN_USERNAME='adminuser'
+OWL_ADMIN_PASSWORD='Changeme'
 ADMIN_TOKEN=$(curl -s -X POST http://localhost:8080/realms/owldrive/protocol/openid-connect/token \
   -H 'Content-Type: application/x-www-form-urlencoded' \
   -d 'grant_type=password' \
   -d 'client_id=owl-drive-web' \
-  -d 'username=adminuser' \
-  -d 'password=AdminPassword123!' \
+  -d "username=$OWL_ADMIN_USERNAME" \
+  -d "password=$OWL_ADMIN_PASSWORD" \
   | node -pe "JSON.parse(require('fs').readFileSync(0, 'utf8')).access_token")
 
 curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8081/api/me/storage
@@ -366,7 +369,7 @@ Deleted files remain in `app.files` with `deleted_at` populated and do not appea
 - User provisioning and role mapping: `backend/src/main/java/com/owldrive/api/ProvisioningService.java`
 - Storage API: `backend/src/main/java/com/owldrive/api/MeController.java`, `backend/src/main/java/com/owldrive/api/UserStorageRecord.java`
 - User model: `backend/src/main/java/com/owldrive/api/UserRecord.java`
-- Keycloak roles/admin seed: `infra/keycloak/realm-export.json`
+- Keycloak realm roles, client config, and local seed users: `infra/keycloak/realm-export.json`
 - Frontend storage display: `frontend/app/page.tsx`
 
 ## Phase 3 Files

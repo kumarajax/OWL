@@ -56,8 +56,8 @@
       "credentials": [
         {
           "type": "password",
-          "value": "TestPassword123!",
-          "temporary": false
+          "value": "Changeme",
+          "temporary": true
         }
       ]
     },
@@ -74,8 +74,8 @@
       "credentials": [
         {
           "type": "password",
-          "value": "AdminPassword123!",
-          "temporary": false
+          "value": "Changeme",
+          "temporary": true
         }
       ]
     }
