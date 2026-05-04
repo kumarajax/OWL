@@ -4,6 +4,7 @@ import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useSta
 import {
   ArrowLeft,
   ChevronRight,
+  Copy,
   Download,
   FileText,
   Folder,
@@ -13,6 +14,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Share2,
   Trash2,
   Upload,
   UserCircle
@@ -62,6 +64,18 @@ type DriveItem = {
   checksumSha256: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+type FileShare = {
+  id: string;
+  fileId: string;
+  ownerId: string;
+  shareUrl: string | null;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  downloadCount: number;
+  lastDownloadedAt: string | null;
+  createdAt: string;
 };
 
 const realm = process.env.NEXT_PUBLIC_KEYCLOAK_REALM ?? "owldrive";
@@ -276,7 +290,10 @@ export default function Home() {
   const [deactivating, setDeactivating] = useState(false);
   const [activating, setActivating] = useState(false);
   const [registrationStatus, setRegistrationStatus] = useState<RegistrationStatus | null>(null);
+  const [shareDialogUrl, setShareDialogUrl] = useState("");
+  const [shareCopied, setShareCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const shareLinkInputRef = useRef<HTMLInputElement | null>(null);
   const keycloakBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_KEYCLOAK_URL, 8080);
   const apiBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL, 8081);
 
@@ -713,6 +730,50 @@ export default function Home() {
     }
   }
 
+  async function shareFile(item: DriveItem) {
+    if (!jsonHeaders) return;
+    setError("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/files/${item.id}/shares`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({})
+      });
+      const share = await readJson<FileShare>(response);
+      if (!share.shareUrl) {
+        throw new Error("Share link was not returned.");
+      }
+      setShareDialogUrl(share.shareUrl);
+      setShareCopied(false);
+    } catch (err) {
+      handleRequestError(err, "Unable to create share link");
+    }
+  }
+
+  async function copyShareLink() {
+    if (!shareDialogUrl) return;
+    let copied = false;
+    try {
+      if (navigator.clipboard?.writeText && window.isSecureContext) {
+        await navigator.clipboard.writeText(shareDialogUrl);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+    if (!copied && shareLinkInputRef.current) {
+      shareLinkInputRef.current.focus();
+      shareLinkInputRef.current.select();
+      copied = document.execCommand("copy");
+    }
+    if (copied) {
+      setShareCopied(true);
+      window.setTimeout(() => setShareCopied(false), 1800);
+      return;
+    }
+    setShareCopied(false);
+  }
+
   function toggleFileSelection(fileId: string) {
     setSelectedFileIds((current) => {
       const next = new Set(current);
@@ -916,6 +977,58 @@ export default function Home() {
               >
                 <Trash2 className="h-4 w-4" />
                 {deactivating ? "Deactivating" : "Deactivate"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {shareDialogUrl ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-lg rounded-lg border border-slate-200 bg-white p-5 shadow-xl">
+            <div className="flex items-start gap-3">
+              <div className="mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-700">
+                <Share2 className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-lg font-semibold text-slate-900">Public share link</h2>
+                <p className="mt-1 text-sm text-slate-600">Anyone with this link can download this file.</p>
+              </div>
+            </div>
+
+            <label className="mt-5 block text-sm font-medium text-slate-700" htmlFor="share-link">
+              Download link
+            </label>
+            <div className="mt-2 flex gap-2">
+              <input
+                id="share-link"
+                ref={shareLinkInputRef}
+                value={shareDialogUrl}
+                readOnly
+                className="h-11 min-w-0 flex-1 rounded-md border border-slate-300 px-3 text-sm outline-none"
+                onFocus={(event) => event.target.select()}
+              />
+              <button
+                type="button"
+                onClick={copyShareLink}
+                className="inline-flex h-11 shrink-0 items-center gap-2 rounded-md bg-blue-600 px-4 font-semibold text-white"
+              >
+                <Copy className="h-4 w-4" />
+                Copy
+              </button>
+            </div>
+            {shareCopied ? <p className="mt-3 text-sm font-semibold text-green-700">Link copied</p> : null}
+
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setShareDialogUrl("");
+                  setShareCopied(false);
+                }}
+                className="inline-flex h-10 items-center rounded-md border border-slate-300 bg-white px-4 font-semibold"
+              >
+                Close
               </button>
             </div>
           </div>
@@ -1257,6 +1370,13 @@ export default function Home() {
                         </>
                       ) : (
                         <>
+                          <button
+                            onClick={() => shareFile(item)}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-transparent hover:border-slate-200 hover:bg-white"
+                            title="Share public link"
+                          >
+                            <Share2 className="h-4 w-4" />
+                          </button>
                           <button
                             onClick={() => downloadFile(item)}
                             className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-transparent hover:border-slate-200 hover:bg-white"
