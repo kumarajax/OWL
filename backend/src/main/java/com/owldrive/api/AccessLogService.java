@@ -14,9 +14,11 @@ import org.springframework.stereotype.Service;
 @Service
 public class AccessLogService {
     private final JdbcTemplate jdbc;
+    private final TelemetryRetentionService telemetryRetentionService;
 
-    public AccessLogService(JdbcTemplate jdbc) {
+    public AccessLogService(JdbcTemplate jdbc, TelemetryRetentionService telemetryRetentionService) {
         this.jdbc = jdbc;
+        this.telemetryRetentionService = telemetryRetentionService;
     }
 
     public void record(HttpServletRequest request, Jwt jwt, int statusCode, long durationMs) {
@@ -49,6 +51,7 @@ public class AccessLogService {
                 statusCode,
                 durationMs,
                 eventType);
+        telemetryRetentionService.pruneToRetention(telemetryRetentionService.currentMaxRetentionRows());
     }
 
     public List<AccessLogRecord> recent(int limit) {
@@ -59,7 +62,7 @@ public class AccessLogService {
                        latitude, longitude, location_source, user_agent, method, path,
                        status_code, duration_ms, event_type, created_at
                 FROM user_access_logs
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, id DESC
                 LIMIT ?
                 """,
                 this::mapAccessLog,

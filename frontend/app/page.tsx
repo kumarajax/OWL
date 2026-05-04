@@ -17,6 +17,7 @@ import {
   Plus,
   RefreshCw,
   Share2,
+  Save,
   Trash2,
   Upload,
   UserCircle
@@ -103,9 +104,17 @@ type AccessLog = {
 
 type AccessLogSortKey = "createdAt" | "email" | "ipAddress" | "location" | "method" | "path" | "statusCode" | "durationMs" | "eventType";
 
+type TelemetryRetention = {
+  maxRetentionRows: number;
+  maxAllowedRetentionRows: number;
+  updatedAt: string;
+};
+
 const realm = process.env.NEXT_PUBLIC_KEYCLOAK_REALM ?? "owldrive";
 const clientId = process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID ?? "owl-drive-web";
 const linkedInProfileUrl = "https://www.linkedin.com/in/ajaykumarpandit/";
+const defaultTelemetryRetentionRows = 100000;
+const maxTelemetryRetentionRows = 1000000;
 
 class AuthExpiredError extends Error {
   constructor() {
@@ -270,6 +279,10 @@ function formatDate(value: string) {
   return dateFormatter.format(new Date(value));
 }
 
+function formatInteger(value: number) {
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
 function formatLocation(log: AccessLog) {
   return [log.city, log.region, log.country].filter(Boolean).join(", ") || "";
 }
@@ -328,6 +341,9 @@ export default function Home() {
   const [shareCopied, setShareCopied] = useState(false);
   const [activeView, setActiveView] = useState<"drive" | "telemetry">("drive");
   const [accessLogs, setAccessLogs] = useState<AccessLog[]>([]);
+  const [telemetryRetention, setTelemetryRetention] = useState<TelemetryRetention | null>(null);
+  const [telemetryRetentionInput, setTelemetryRetentionInput] = useState(String(defaultTelemetryRetentionRows));
+  const [savingTelemetryRetention, setSavingTelemetryRetention] = useState(false);
   const [accessLogSortKey, setAccessLogSortKey] = useState<AccessLogSortKey>("createdAt");
   const [accessLogSortDirection, setAccessLogSortDirection] = useState<"asc" | "desc">("desc");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -388,6 +404,9 @@ export default function Home() {
     setDeactivating(false);
     setActivating(false);
     setError(message);
+    setTelemetryRetention(null);
+    setTelemetryRetentionInput(String(defaultTelemetryRetentionRows));
+    setSavingTelemetryRetention(false);
   }
 
   function handleRequestError(err: unknown, fallback: string) {
@@ -958,10 +977,55 @@ export default function Home() {
     try {
       const response = await fetch(`${apiBaseUrl}/api/admin/access-logs?limit=200`, { headers: jsonHeaders });
       setAccessLogs(await readJson<AccessLog[]>(response));
+      try {
+        const retentionResponse = await fetch(`${apiBaseUrl}/api/admin/telemetry-retention`, { headers: jsonHeaders });
+        const retention = await readJson<TelemetryRetention>(retentionResponse);
+        setTelemetryRetention(retention);
+        setTelemetryRetentionInput(String(retention.maxRetentionRows));
+      } catch {
+        const fallbackRetention: TelemetryRetention = {
+          maxRetentionRows: defaultTelemetryRetentionRows,
+          maxAllowedRetentionRows: maxTelemetryRetentionRows,
+          updatedAt: new Date().toISOString()
+        };
+        setTelemetryRetention(fallbackRetention);
+        setTelemetryRetentionInput(String(defaultTelemetryRetentionRows));
+      }
     } catch (err) {
       handleRequestError(err, "Unable to load telemetry");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function saveTelemetryRetention() {
+    if (!jsonHeaders) return;
+    const parsed = Number(telemetryRetentionInput);
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      setError("Max retention rows must be a whole number greater than 0.");
+      return;
+    }
+    const maxAllowedRows = telemetryRetention?.maxAllowedRetentionRows ?? maxTelemetryRetentionRows;
+    if (parsed > maxAllowedRows) {
+      setError(`Max retention rows cannot exceed ${formatInteger(maxAllowedRows)}.`);
+      return;
+    }
+
+    setSavingTelemetryRetention(true);
+    setError("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/admin/telemetry-retention`, {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ maxRetentionRows: parsed })
+      });
+      const updated = await readJson<TelemetryRetention>(response);
+      setTelemetryRetention(updated);
+      setTelemetryRetentionInput(String(updated.maxRetentionRows));
+    } catch (err) {
+      handleRequestError(err, "Unable to save telemetry retention");
+    } finally {
+      setSavingTelemetryRetention(false);
     }
   }
 
@@ -1018,6 +1082,7 @@ export default function Home() {
     ...children.filter((item) => item.itemType === "folder").map((item) => ({ id: item.id, name: item.name }))
   ];
   const canViewTelemetry = user?.role === "ADMIN" || user?.role === "OPERATIONS";
+  const canManageTelemetryRetention = canViewTelemetry;
   const sortedAccessLogs = [...accessLogs].sort((left, right) => {
     const value = (log: AccessLog) => {
       if (accessLogSortKey === "location") return formatLocation(log);
@@ -1422,18 +1487,66 @@ export default function Home() {
                     <h1 className="text-xl font-semibold text-slate-900">Telemetry</h1>
                     <p className="mt-1 text-sm text-slate-600">Recent access logs for OWL Drive API requests.</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={loadTelemetry}
-                    disabled={loading}
-                    className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 font-semibold disabled:opacity-50"
-                  >
-                    <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-                    Refresh
-                  </button>
                 </div>
 
                 {error ? <p className="rounded-md border border-red-200 bg-red-50 p-3 text-red-700">{error}</p> : null}
+
+                {canManageTelemetryRetention ? (
+                  <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <h2 className="text-sm font-semibold text-slate-900">Retention</h2>
+                        <p className="mt-1 text-sm text-slate-600">
+                          Keep only the newest telemetry rows. Older rows are deleted automatically.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={loadTelemetry}
+                        disabled={loading}
+                        className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold disabled:opacity-50"
+                      >
+                        <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                        Refresh
+                      </button>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap items-end gap-3">
+                      <label className="flex min-w-56 flex-1 flex-col gap-2 text-sm">
+                        <span className="font-medium text-slate-700">Max retention rows</span>
+                          <input
+                          type="number"
+                          min={1}
+                          max={telemetryRetention?.maxAllowedRetentionRows ?? maxTelemetryRetentionRows}
+                          value={telemetryRetentionInput}
+                          onChange={(event) => setTelemetryRetentionInput(event.target.value)}
+                          className="h-11 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={saveTelemetryRetention}
+                        disabled={savingTelemetryRetention || loading}
+                        className="inline-flex h-11 items-center gap-2 rounded-md bg-blue-600 px-4 font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        <Save className="h-4 w-4" />
+                        {savingTelemetryRetention ? "Saving" : "Save retention"}
+                      </button>
+                    </div>
+
+                    <div className="mt-3 text-sm text-slate-600">
+                      Current cap:{" "}
+                      <span className="font-semibold text-slate-900">
+                        {telemetryRetention ? formatInteger(telemetryRetention.maxRetentionRows) : formatInteger(defaultTelemetryRetentionRows)}
+                      </span>
+                      {" "}rows. Maximum allowed:{" "}
+                      <span className="font-semibold text-slate-900">
+                        {telemetryRetention ? formatInteger(telemetryRetention.maxAllowedRetentionRows) : "1,000,000"}
+                      </span>
+                      {" "}rows.
+                    </div>
+                  </section>
+                ) : null}
 
                 <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
                   <table className="min-w-[1180px] w-full border-collapse text-left text-sm">
