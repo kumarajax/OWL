@@ -622,14 +622,12 @@ export default function Home() {
   }
 
   function logout() {
-    const idToken = localStorage.getItem("owl_id_token");
     clearSession();
     const origin = getBrowserOrigin();
     const params = new URLSearchParams({
       client_id: clientId,
       post_logout_redirect_uri: origin
     });
-    if (idToken) params.set("id_token_hint", idToken);
     window.location.href = `${keycloakBaseUrl}/realms/${realm}/protocol/openid-connect/logout?${params}`;
   }
 
@@ -1056,14 +1054,12 @@ export default function Home() {
         body: JSON.stringify({ confirmation: typedEmail })
       });
       if (!response.ok) await readJson(response);
-      const idToken = localStorage.getItem("owl_id_token");
       window.alert("Account deactivated. Your OWL Drive files were deleted.");
       clearSession();
       const params = new URLSearchParams({
         client_id: clientId,
         post_logout_redirect_uri: getBrowserOrigin()
       });
-      if (idToken) params.set("id_token_hint", idToken);
       window.location.href = `${keycloakBaseUrl}/realms/${realm}/protocol/openid-connect/logout?${params}`;
     } catch (err) {
       handleRequestError(err, "Unable to deactivate account");
