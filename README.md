@@ -132,18 +132,17 @@ Realm settings -> Tokens -> Access Token Lifespan
 
 When an access token expires, the frontend clears the local session and returns to the login screen.
 
-## Local File Storage
+## Object Storage
 
-Local file bytes are stored under:
+OWL Drive stores file bytes in MinIO and keeps file metadata in Postgres.
 
-```text
-./backend/data/storage
-```
-
-The configured value is:
+The default local MinIO settings are:
 
 ```yaml
-app.storage.local.root: ./data/storage
+app.storage.minio.endpoint: http://localhost:9000
+app.storage.minio.access-key: minioadmin
+app.storage.minio.secret-key: minioadmin
+app.storage.minio.bucket: owl-drive
 spring.servlet.multipart.max-file-size: 1GB
 spring.servlet.multipart.max-request-size: 1GB
 app.storage.max-upload-bytes: 1073741824
@@ -158,10 +157,10 @@ APP_STORAGE_MAX_REQUEST_SIZE=1GB
 APP_STORAGE_MAX_UPLOAD_BYTES=1073741824
 ```
 
-Physical storage paths use generated IDs only:
+Object keys use generated IDs only:
 
 ```text
-./data/storage/{userId}/{fileId}/original
+{userId}/{fileId}/original
 ```
 
 User-provided filenames are stored only as metadata and download display names.
@@ -377,7 +376,7 @@ Deleted files remain in `app.files` with `deleted_at` populated and do not appea
 - Migration: `backend/src/main/resources/db/migration/V3__phase3_files.sql`
 - File API: `backend/src/main/java/com/owldrive/api/FileController.java`
 - File logic: `backend/src/main/java/com/owldrive/api/FileService.java`
-- Local storage: `backend/src/main/java/com/owldrive/api/LocalStorageService.java`
+- Object storage: `backend/src/main/java/com/owldrive/api/MinioObjectStorageService.java`
 - File records: `backend/src/main/java/com/owldrive/api/FileRecord.java`, `backend/src/main/java/com/owldrive/api/DriveItemRecord.java`, `backend/src/main/java/com/owldrive/api/DownloadableFile.java`, `backend/src/main/java/com/owldrive/api/StoredFile.java`
 - Folder listing update: `backend/src/main/java/com/owldrive/api/FolderService.java`, `backend/src/main/java/com/owldrive/api/FolderController.java`
 - Storage config: `backend/src/main/resources/application.yml`

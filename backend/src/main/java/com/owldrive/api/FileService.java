@@ -1,15 +1,12 @@
 package com.owldrive.api;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.InputStreamResource;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -30,7 +27,7 @@ public class FileService {
     private final JdbcTemplate jdbc;
     private final ProvisioningService provisioningService;
     private final FolderService folderService;
-    private final LocalStorageService localStorageService;
+    private final ObjectStorageService objectStorageService;
     private final long maxUploadBytes;
     private final boolean rejectEmptyFiles;
 
@@ -38,13 +35,13 @@ public class FileService {
             JdbcTemplate jdbc,
             ProvisioningService provisioningService,
             FolderService folderService,
-            LocalStorageService localStorageService,
+            ObjectStorageService objectStorageService,
             @Value("${app.storage.max-upload-bytes:1073741824}") long maxUploadBytes,
             @Value("${app.storage.reject-empty-files:true}") boolean rejectEmptyFiles) {
         this.jdbc = jdbc;
         this.provisioningService = provisioningService;
         this.folderService = folderService;
-        this.localStorageService = localStorageService;
+        this.objectStorageService = objectStorageService;
         this.maxUploadBytes = maxUploadBytes;
         this.rejectEmptyFiles = rejectEmptyFiles;
     }
@@ -64,7 +61,7 @@ public class FileService {
         UUID fileId = UUID.randomUUID();
         StoredFile storedFile;
         try {
-            storedFile = localStorageService.store(user.id(), fileId, upload);
+            storedFile = objectStorageService.store(user.id(), fileId, upload);
         } catch (IOException ex) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to store file", ex);
         }
@@ -104,12 +101,11 @@ public class FileService {
     public DownloadableFile download(Jwt jwt, UUID fileId) {
         UserRecord user = provisioningService.ensureUser(jwt);
         FileRecord file = requireOwnedActiveFile(user, fileId);
-        Path path = localStorageService.resolveStorageKey(file.storageKey());
-        if (!Files.isRegularFile(path)) {
-            throw notFound("File bytes not found");
-        }
         try {
-            return new DownloadableFile(file, new InputStreamResource(Files.newInputStream(path)), Files.size(path));
+            StorageDownload download = objectStorageService.download(file.storageKey());
+            return new DownloadableFile(file, download.resource(), download.sizeBytes());
+        } catch (java.nio.file.NoSuchFileException ex) {
+            throw notFound("File bytes not found");
         } catch (IOException ex) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to read file", ex);
         }
@@ -200,7 +196,7 @@ public class FileService {
             @Override
             public void afterCommit() {
                 try {
-                    localStorageService.deleteStorageKey(file.storageKey());
+                    objectStorageService.deleteStorageKey(file.storageKey());
                 } catch (IOException ex) {
                     log.warn("Unable to delete stored bytes for file {} at {}", file.id(), file.storageKey(), ex);
                 }
@@ -210,7 +206,7 @@ public class FileService {
 
     private void deleteStoredBytesQuietly(StoredFile storedFile) {
         try {
-            localStorageService.deleteStorageKey(storedFile.storageKey());
+            objectStorageService.deleteStorageKey(storedFile.storageKey());
         } catch (IOException ex) {
             log.warn("Unable to delete stored bytes after failed upload at {}", storedFile.storageKey(), ex);
         }

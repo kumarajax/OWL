@@ -29,7 +29,7 @@ public class AccountService {
 
     private final JdbcTemplate jdbc;
     private final ProvisioningService provisioningService;
-    private final LocalStorageService localStorageService;
+    private final ObjectStorageService objectStorageService;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
     private final String keycloakBaseUrl;
@@ -41,7 +41,7 @@ public class AccountService {
     public AccountService(
             JdbcTemplate jdbc,
             ProvisioningService provisioningService,
-            LocalStorageService localStorageService,
+            ObjectStorageService objectStorageService,
             ObjectMapper objectMapper,
             @Value("${app.keycloak.base-url:${KEYCLOAK_INTERNAL_URL:http://localhost:8080}}") String keycloakBaseUrl,
             @Value("${app.keycloak.realm:${KEYCLOAK_REALM:owldrive}}") String keycloakRealm,
@@ -50,7 +50,7 @@ public class AccountService {
             @Value("${app.keycloak.admin-password:${KEYCLOAK_ADMIN_PASSWORD:admin}}") String keycloakAdminPassword) {
         this.jdbc = jdbc;
         this.provisioningService = provisioningService;
-        this.localStorageService = localStorageService;
+        this.objectStorageService = objectStorageService;
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newHttpClient();
         this.keycloakBaseUrl = trimTrailingSlash(keycloakBaseUrl);
@@ -217,7 +217,7 @@ public class AccountService {
             @Override
             public void afterCommit() {
                 try {
-                    localStorageService.deleteOwnerStorage(user.id());
+                    objectStorageService.deleteOwnerStorage(user.id());
                 } catch (IOException ex) {
                     log.warn("Unable to delete stored bytes for deactivated user {}", user.id(), ex);
                 }

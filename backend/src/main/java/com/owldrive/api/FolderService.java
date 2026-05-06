@@ -26,15 +26,15 @@ public class FolderService {
 
     private final JdbcTemplate jdbc;
     private final ProvisioningService provisioningService;
-    private final LocalStorageService localStorageService;
+    private final ObjectStorageService objectStorageService;
 
     public FolderService(
             JdbcTemplate jdbc,
             ProvisioningService provisioningService,
-            LocalStorageService localStorageService) {
+            ObjectStorageService objectStorageService) {
         this.jdbc = jdbc;
         this.provisioningService = provisioningService;
-        this.localStorageService = localStorageService;
+        this.objectStorageService = objectStorageService;
     }
 
     @Transactional(readOnly = true)
@@ -251,7 +251,7 @@ public class FolderService {
             public void afterCommit() {
                 for (String storageKey : storageKeys) {
                     try {
-                        localStorageService.deleteStorageKey(storageKey);
+                        objectStorageService.deleteStorageKey(storageKey);
                     } catch (IOException ex) {
                         log.warn("Unable to delete stored bytes at {}", storageKey, ex);
                     }

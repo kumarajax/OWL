@@ -10,6 +10,18 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
   keycloak:
     image: quay.io/keycloak/keycloak:25.0
     command: ["start-dev", "--import-realm"]
@@ -23,3 +35,4 @@ services:
 
 volumes:
   postgres-data:
+  minio-data:

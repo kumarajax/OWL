@@ -1,8 +1,6 @@
 package com.owldrive.api;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
@@ -13,7 +11,6 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
-import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -28,17 +25,17 @@ public class FileShareService {
     private final JdbcTemplate jdbc;
     private final ProvisioningService provisioningService;
     private final FolderService folderService;
-    private final LocalStorageService localStorageService;
+    private final ObjectStorageService objectStorageService;
 
     public FileShareService(
             JdbcTemplate jdbc,
             ProvisioningService provisioningService,
             FolderService folderService,
-            LocalStorageService localStorageService) {
+            ObjectStorageService objectStorageService) {
         this.jdbc = jdbc;
         this.provisioningService = provisioningService;
         this.folderService = folderService;
-        this.localStorageService = localStorageService;
+        this.objectStorageService = objectStorageService;
     }
 
     @Transactional
@@ -129,12 +126,11 @@ public class FileShareService {
                 """,
                 sha256Hex(token));
 
-        Path path = localStorageService.resolveStorageKey(file.storageKey());
-        if (!Files.isRegularFile(path)) {
-            throw notFound("File bytes not found");
-        }
         try {
-            return new DownloadableFile(file, new InputStreamResource(Files.newInputStream(path)), Files.size(path));
+            StorageDownload download = objectStorageService.download(file.storageKey());
+            return new DownloadableFile(file, download.resource(), download.sizeBytes());
+        } catch (java.nio.file.NoSuchFileException ex) {
+            throw notFound("File bytes not found");
         } catch (IOException ex) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to read file", ex);
         }
