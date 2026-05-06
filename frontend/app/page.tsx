@@ -104,7 +104,7 @@ type AccessLog = {
   createdAt: string;
 };
 
-type AccessLogSortKey = "createdAt" | "displayName" | "ipAddress" | "location" | "method" | "path" | "statusCode" | "durationMs" | "eventType";
+type AccessLogSortKey = "createdAt" | "displayName" | "email" | "ipAddress" | "location" | "method" | "path" | "statusCode" | "durationMs" | "eventType";
 
 type TelemetryRetention = {
   maxRetentionRows: number;
@@ -254,6 +254,13 @@ function randomString() {
   return base64Url(bytes.buffer as ArrayBuffer);
 }
 
+function generateCaptchaCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = new Uint8Array(5);
+  (globalThis.crypto ?? window.crypto).getRandomValues(bytes);
+  return Array.from(bytes, (value) => alphabet[value % alphabet.length]).join("");
+}
+
 async function readJson<T>(response: Response): Promise<T> {
   if (response.ok) return response.json();
   if (response.status === 401) throw new AuthExpiredError();
@@ -390,6 +397,9 @@ export default function Home() {
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginSubmitting, setLoginSubmitting] = useState(false);
+  const [registrationCaptchaCode, setRegistrationCaptchaCode] = useState("");
+  const [registrationCaptchaInput, setRegistrationCaptchaInput] = useState("");
+  const [registrationCaptchaSubmitting, setRegistrationCaptchaSubmitting] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [rootFolder, setRootFolder] = useState<FolderRecord | null>(null);
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
@@ -688,6 +698,39 @@ export default function Home() {
       code_challenge_method: "S256"
     });
     window.location.href = `${keycloakBaseUrl}/realms/${realm}/protocol/openid-connect/registrations?${params}`;
+  }
+
+  function openRegistrationCaptcha() {
+    setError("");
+    setRegistrationCaptchaCode(generateCaptchaCode());
+    setRegistrationCaptchaInput("");
+    setAuthMode("register");
+  }
+
+  function cancelRegistrationCaptcha() {
+    setRegistrationCaptchaCode("");
+    setRegistrationCaptchaInput("");
+    setAuthMode("login");
+  }
+
+  async function submitRegistrationCaptcha(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!registrationCaptchaCode) {
+      setRegistrationCaptchaCode(generateCaptchaCode());
+      return;
+    }
+    if (registrationCaptchaInput.trim().toUpperCase() !== registrationCaptchaCode) {
+      setError("Captcha code did not match.");
+      setRegistrationCaptchaInput("");
+      setRegistrationCaptchaCode(generateCaptchaCode());
+      return;
+    }
+    setRegistrationCaptchaSubmitting(true);
+    try {
+      await registerAccount();
+    } finally {
+      setRegistrationCaptchaSubmitting(false);
+    }
   }
 
   async function loginWithPassword(event: FormEvent<HTMLFormElement>) {
@@ -1476,10 +1519,56 @@ export default function Home() {
             </form>
             {registrationFull ? (
               <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">Max usage reached.</p>
+            ) : authMode === "register" ? (
+              <form className="mt-4 space-y-3 rounded-md border border-slate-200 bg-slate-50 p-4" onSubmit={submitRegistrationCaptcha}>
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Captcha code</div>
+                  <div className="mt-2 flex items-center justify-between gap-3 rounded-md border border-slate-300 bg-white px-4 py-3">
+                    <span className="font-mono text-lg font-semibold tracking-[0.35em] text-slate-900">{registrationCaptchaCode}</span>
+                    <button
+                      type="button"
+                      onClick={() => setRegistrationCaptchaCode(generateCaptchaCode())}
+                      className="inline-flex h-9 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700"
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700" htmlFor="owl-captcha">
+                    Enter captcha
+                  </label>
+                  <input
+                    id="owl-captcha"
+                    value={registrationCaptchaInput}
+                    onChange={(event) => setRegistrationCaptchaInput(event.target.value)}
+                    className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={cancelRegistrationCaptcha}
+                    className="inline-flex h-11 flex-1 items-center justify-center rounded-md border border-slate-300 bg-white px-4 font-semibold text-slate-800"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={registrationCaptchaSubmitting || !registrationCaptchaInput.trim()}
+                    className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 font-semibold text-white disabled:opacity-50"
+                  >
+                    <Plus className="h-4 w-4" />
+                    {registrationCaptchaSubmitting ? "Checking" : "Continue"}
+                  </button>
+                </div>
+              </form>
             ) : (
               <button
                 type="button"
-                onClick={() => registerAccount()}
+                onClick={openRegistrationCaptcha}
                 className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-5 font-semibold text-slate-800"
               >
                 <Plus className="h-4 w-4" />
@@ -1871,6 +1960,7 @@ export default function Home() {
                         {[
                           ["createdAt", "Time"],
                           ["displayName", "User"],
+                          ["email", "Email"],
                           ["ipAddress", "IP"],
                           ["location", "Location"],
                           ["method", "Method"],
@@ -1897,7 +1987,7 @@ export default function Home() {
                     <tbody>
                       {sortedAccessLogs.length === 0 ? (
                         <tr>
-                          <td colSpan={9} className="px-3 py-10 text-center text-slate-500">
+                          <td colSpan={10} className="px-3 py-10 text-center text-slate-500">
                             {loading ? "Loading telemetry..." : "No telemetry logs yet"}
                           </td>
                         </tr>
@@ -1906,6 +1996,7 @@ export default function Home() {
                           <tr key={log.id} className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50">
                             <td className="whitespace-nowrap px-3 py-2 text-slate-700">{formatDate(log.createdAt)}</td>
                             <td className="max-w-56 truncate px-3 py-2 font-medium text-slate-800">{log.displayName || log.email || log.keycloakId || "Anonymous"}</td>
+                            <td className="max-w-56 truncate px-3 py-2 text-slate-700" title={log.email || ""}>{log.email || ""}</td>
                             <td className="whitespace-nowrap px-3 py-2 text-slate-700">{log.ipAddress || ""}</td>
                             <td className="max-w-56 truncate px-3 py-2 text-slate-700">{formatLocation(log)}</td>
                             <td className="whitespace-nowrap px-3 py-2 font-semibold text-slate-700">{log.method}</td>
