@@ -22,6 +22,20 @@ services:
     volumes:
       - minio-data:/data
 
+  keycloak-db-init:
+    image: postgres:16
+    depends_on:
+      - postgres
+    environment:
+      PGPASSWORD: owldrive_dev_password
+    command:
+      [
+        "sh",
+        "-lc",
+        "until pg_isready -h postgres -U owldrive -d owldrive >/dev/null 2>&1; do sleep 1; done; psql -h postgres -U owldrive -d owldrive -v ON_ERROR_STOP=1 -c 'CREATE SCHEMA IF NOT EXISTS keycloak AUTHORIZATION owldrive;'"
+      ]
+    restart: "no"
+
   keycloak:
     build:
       context: ./infra/keycloak
@@ -29,8 +43,16 @@ services:
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/owldrive?currentSchema=keycloak
+      KC_DB_USERNAME: owldrive
+      KC_DB_PASSWORD: owldrive_dev_password
+      KC_FEATURES: persistent-user-sessions
     ports:
       - "8080:8080"
+    depends_on:
+      keycloak-db-init:
+        condition: service_completed_successfully
 
   backend:
     build:

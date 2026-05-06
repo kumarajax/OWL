@@ -1,6 +1,7 @@
 {
   "realm": "owldrive",
   "enabled": true,
+  "sslRequired": "none",
   "accessTokenLifespan": 300,
   "registrationAllowed": true,
   "registrationEmailAsUsername": true,
