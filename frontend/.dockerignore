@@ -1,0 +1,7 @@
+.next
+node_modules
+.git
+.idea
+.run
+logs
+*.log

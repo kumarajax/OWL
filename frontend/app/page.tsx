@@ -1734,7 +1734,7 @@ export default function Home() {
             ) : null}
 
             <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-              <div className="grid grid-cols-[44px_minmax(0,1fr)_120px_160px_auto] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-600">
+              <div className="hidden grid-cols-[44px_minmax(0,1fr)_120px_160px_auto] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-600 md:grid">
                 <div className="flex items-center justify-center">
                   <input
                     type="checkbox"
@@ -1756,9 +1756,45 @@ export default function Home() {
                 children.map((item) => (
                   <div
                     key={`${item.itemType}-${item.id}`}
-                    className="grid grid-cols-[44px_minmax(0,1fr)_120px_160px_auto] items-center gap-3 border-b border-slate-100 px-4 py-2 text-sm last:border-b-0 hover:bg-slate-50"
+                    className="border-b border-slate-100 px-4 py-3 text-sm last:border-b-0 hover:bg-slate-50 md:grid md:grid-cols-[44px_minmax(0,1fr)_120px_160px_auto] md:items-center md:gap-3 md:py-2"
                   >
-                    <div className="flex items-center justify-center">
+                    <div className="flex items-start gap-3 md:hidden">
+                      <div className="pt-1">
+                        {item.itemType === "file" ? (
+                          <input
+                            type="checkbox"
+                            checked={selectedFileIds.has(item.id)}
+                            onChange={() => toggleFileSelection(item.id)}
+                            aria-label={`Select ${item.name}`}
+                            className="h-4 w-4"
+                          />
+                        ) : (
+                          <div className="h-4 w-4" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <button
+                          onClick={item.itemType === "folder" ? () => openFolder(itemToFolder(item)) : undefined}
+                          className={`flex min-w-0 items-center gap-3 text-left ${item.itemType === "folder" ? "rounded-md py-1" : "py-1"}`}
+                        >
+                          {item.itemType === "folder" ? (
+                            <Folder className="h-5 w-5 shrink-0 text-blue-600" />
+                          ) : (
+                            <FileText className="h-5 w-5 shrink-0 text-slate-500" />
+                          )}
+                          <span className="truncate font-medium">{item.name}</span>
+                        </button>
+                        {item.itemType === "file" ? (
+                          <div className="mt-1 truncate text-xs text-slate-500">{item.contentType || "application/octet-stream"}</div>
+                        ) : null}
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+                          <span>{item.itemType === "file" ? formatBytes(item.sizeBytes) : "Folder"}</span>
+                          <span>{formatDate(item.updatedAt)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="hidden md:flex md:items-center md:justify-center">
                       {item.itemType === "file" ? (
                         <input
                           type="checkbox"
@@ -1770,12 +1806,12 @@ export default function Home() {
                       ) : null}
                     </div>
                     {item.itemType === "folder" ? (
-                      <button onClick={() => openFolder(itemToFolder(item))} className="flex min-w-0 items-center gap-3 rounded-md py-2 text-left">
+                      <button onClick={() => openFolder(itemToFolder(item))} className="hidden min-w-0 items-center gap-3 rounded-md py-2 text-left md:flex">
                         <Folder className="h-5 w-5 shrink-0 text-blue-600" />
                         <span className="truncate font-medium">{item.name}</span>
                       </button>
                     ) : (
-                      <div className="flex min-w-0 items-center gap-3 py-2">
+                      <div className="hidden min-w-0 items-center gap-3 py-2 md:flex">
                         <FileText className="h-5 w-5 shrink-0 text-slate-500" />
                         <div className="min-w-0">
                           <div className="truncate font-medium">{item.name}</div>
@@ -1783,9 +1819,9 @@ export default function Home() {
                         </div>
                       </div>
                     )}
-                    <div className="text-slate-600">{item.itemType === "file" ? formatBytes(item.sizeBytes) : ""}</div>
-                    <div className="truncate text-slate-600">{formatDate(item.updatedAt)}</div>
-                    <div className="flex items-center justify-end gap-1">
+                    <div className="hidden text-slate-600 md:block">{item.itemType === "file" ? formatBytes(item.sizeBytes) : ""}</div>
+                    <div className="hidden truncate text-slate-600 md:block">{formatDate(item.updatedAt)}</div>
+                    <div className="mt-2 flex items-center gap-1 md:mt-0 md:justify-end">
                       {item.itemType === "folder" ? (
                         <>
                           <button

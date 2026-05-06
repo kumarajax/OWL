@@ -2,12 +2,21 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT_DIR"
 source "$ROOT_DIR/scripts/runtime-env.sh"
 runtime_urls
 
 KEYCLOAK_ADMIN_USER="${KEYCLOAK_ADMIN_USER:-admin}"
 KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-admin}"
-CONTAINER="${KEYCLOAK_CONTAINER:-owl-keycloak-1}"
+CONTAINER="${KEYCLOAK_CONTAINER:-}"
+
+if [ -z "$CONTAINER" ]; then
+  CONTAINER="$(docker compose ps -q keycloak 2>/dev/null || true)"
+fi
+
+if [ -z "$CONTAINER" ]; then
+  CONTAINER="owl-keycloak-1"
+fi
 
 redirect_uris_json=$(printf '["%s","%s/*","%s","%s/*","%s","%s/*"]' \
   "$FRONTEND_LOCAL_ORIGIN" "$FRONTEND_LOCAL_ORIGIN" \
