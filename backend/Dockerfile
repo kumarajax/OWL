@@ -4,7 +4,7 @@ WORKDIR /workspace
 COPY pom.xml .
 COPY src ./src
 
-RUN mvn -q -DskipTests package
+RUN mvn -q -DskipTests package spring-boot:repackage
 
 FROM eclipse-temurin:21-jre-jammy
 WORKDIR /app
