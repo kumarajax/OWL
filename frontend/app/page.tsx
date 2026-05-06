@@ -27,6 +27,7 @@ type User = {
   id: string;
   email: string;
   username: string;
+  displayName?: string;
   role?: string;
   quotaBytes?: number | null;
   usedBytes?: number;
@@ -84,6 +85,7 @@ type FileShare = {
 type AccessLog = {
   id: string;
   userId: string | null;
+  displayName: string | null;
   keycloakId: string | null;
   email: string | null;
   ipAddress: string | null;
@@ -102,12 +104,33 @@ type AccessLog = {
   createdAt: string;
 };
 
-type AccessLogSortKey = "createdAt" | "email" | "ipAddress" | "location" | "method" | "path" | "statusCode" | "durationMs" | "eventType";
+type AccessLogSortKey = "createdAt" | "displayName" | "ipAddress" | "location" | "method" | "path" | "statusCode" | "durationMs" | "eventType";
 
 type TelemetryRetention = {
   maxRetentionRows: number;
   maxAllowedRetentionRows: number;
   updatedAt: string;
+};
+
+type TelemetryFilters = {
+  createdFrom: string;
+  createdTo: string;
+  user: string;
+  displayName: string;
+  email: string;
+  keycloakId: string;
+  ipAddress: string;
+  country: string;
+  region: string;
+  city: string;
+  locationSource: string;
+  userAgent: string;
+  method: string;
+  path: string;
+  statusCode: string;
+  durationMinMs: string;
+  durationMaxMs: string;
+  eventType: string;
 };
 
 const realm = process.env.NEXT_PUBLIC_KEYCLOAK_REALM ?? "owldrive";
@@ -279,12 +302,63 @@ function formatDate(value: string) {
   return dateFormatter.format(new Date(value));
 }
 
+function formatName(value: string | undefined | null) {
+  if (!value) return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (trimmed.includes(" ")) {
+    return trimmed.split(/\s+/, 1)[0];
+  }
+  if (trimmed.includes("@")) {
+    return trimmed.split("@", 1)[0];
+  }
+  return trimmed;
+}
+
+function accountName(user: User | null) {
+  return formatName(user?.displayName) || formatName(user?.username) || formatName(user?.email) || "Account";
+}
+
 function formatInteger(value: number) {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
 function formatLocation(log: AccessLog) {
   return [log.city, log.region, log.country].filter(Boolean).join(", ") || "";
+}
+
+function telemetryParams(filters: TelemetryFilters) {
+  const params = new URLSearchParams({ limit: "200" });
+  const append = (key: string, value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    params.set(key, trimmed);
+  };
+  const appendDate = (key: string, value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    params.set(key, new Date(trimmed).toISOString());
+  };
+
+  appendDate("createdFrom", filters.createdFrom);
+  appendDate("createdTo", filters.createdTo);
+  append("user", filters.user);
+  append("displayName", filters.displayName);
+  append("email", filters.email);
+  append("keycloakId", filters.keycloakId);
+  append("ipAddress", filters.ipAddress);
+  append("country", filters.country);
+  append("region", filters.region);
+  append("city", filters.city);
+  append("locationSource", filters.locationSource);
+  append("userAgent", filters.userAgent);
+  append("method", filters.method);
+  append("path", filters.path);
+  append("statusCode", filters.statusCode);
+  append("durationMinMs", filters.durationMinMs);
+  append("durationMaxMs", filters.durationMaxMs);
+  append("eventType", filters.eventType);
+  return params;
 }
 
 function getBrowserOrigin() {
@@ -341,6 +415,26 @@ export default function Home() {
   const [shareCopied, setShareCopied] = useState(false);
   const [activeView, setActiveView] = useState<"drive" | "telemetry">("drive");
   const [accessLogs, setAccessLogs] = useState<AccessLog[]>([]);
+  const [telemetryFilters, setTelemetryFilters] = useState<TelemetryFilters>({
+    createdFrom: "",
+    createdTo: "",
+    user: "",
+    displayName: "",
+    email: "",
+    keycloakId: "",
+    ipAddress: "",
+    country: "",
+    region: "",
+    city: "",
+    locationSource: "",
+    userAgent: "",
+    method: "",
+    path: "",
+    statusCode: "",
+    durationMinMs: "",
+    durationMaxMs: "",
+    eventType: ""
+  });
   const [telemetryRetention, setTelemetryRetention] = useState<TelemetryRetention | null>(null);
   const [telemetryRetentionInput, setTelemetryRetentionInput] = useState(String(defaultTelemetryRetentionRows));
   const [savingTelemetryRetention, setSavingTelemetryRetention] = useState(false);
@@ -407,6 +501,27 @@ export default function Home() {
     setTelemetryRetention(null);
     setTelemetryRetentionInput(String(defaultTelemetryRetentionRows));
     setSavingTelemetryRetention(false);
+    setAccessLogs([]);
+    setTelemetryFilters({
+      createdFrom: "",
+      createdTo: "",
+      user: "",
+      displayName: "",
+      email: "",
+      keycloakId: "",
+      ipAddress: "",
+      country: "",
+      region: "",
+      city: "",
+      locationSource: "",
+      userAgent: "",
+      method: "",
+      path: "",
+      statusCode: "",
+      durationMinMs: "",
+      durationMaxMs: "",
+      eventType: ""
+    });
   }
 
   function handleRequestError(err: unknown, fallback: string) {
@@ -973,7 +1088,7 @@ export default function Home() {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch(`${apiBaseUrl}/api/admin/access-logs?limit=200`, { headers: jsonHeaders });
+      const response = await fetch(`${apiBaseUrl}/api/admin/access-logs?${telemetryParams(telemetryFilters)}`, { headers: jsonHeaders });
       setAccessLogs(await readJson<AccessLog[]>(response));
       try {
         const retentionResponse = await fetch(`${apiBaseUrl}/api/admin/telemetry-retention`, { headers: jsonHeaders });
@@ -994,6 +1109,29 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function resetTelemetryFilters() {
+    setTelemetryFilters({
+      createdFrom: "",
+      createdTo: "",
+      user: "",
+      displayName: "",
+      email: "",
+      keycloakId: "",
+      ipAddress: "",
+      country: "",
+      region: "",
+      city: "",
+      locationSource: "",
+      userAgent: "",
+      method: "",
+      path: "",
+      statusCode: "",
+      durationMinMs: "",
+      durationMaxMs: "",
+      eventType: ""
+    });
   }
 
   async function saveTelemetryRetention() {
@@ -1101,7 +1239,9 @@ export default function Home() {
         </div>
         {token ? (
           <div className="flex items-center gap-3">
-            <div className="hidden text-sm text-slate-600 sm:block">{user?.email || user?.username}</div>
+            <div className="hidden text-sm text-slate-600 sm:block" title={user?.displayName ?? user?.email ?? user?.username ?? ""}>
+              {accountName(user)}
+            </div>
             <button onClick={logout} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 font-semibold">
               <LogOut className="h-4 w-4" />
               Log out
@@ -1389,7 +1529,9 @@ export default function Home() {
             <div className="mt-5 border-t border-slate-200 pt-5 text-sm">
               <div className="flex min-w-0 items-center gap-2 text-slate-700">
                 <UserCircle className="h-4 w-4 shrink-0" />
-                <span className="truncate font-medium">{user?.email || user?.username}</span>
+                <span className="truncate font-medium" title={user?.displayName ?? user?.email ?? user?.username ?? ""}>
+                  {accountName(user)}
+                </span>
               </div>
               {canViewTelemetry ? (
                 <button
@@ -1440,7 +1582,9 @@ export default function Home() {
             <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-200 pb-4 text-sm md:hidden">
               <div className="flex min-w-0 items-center gap-2 text-slate-700">
                 <UserCircle className="h-4 w-4 shrink-0" />
-                <span className="truncate font-medium">{user?.email || user?.username}</span>
+                <span className="truncate font-medium" title={user?.displayName ?? user?.email ?? user?.username ?? ""}>
+                  {accountName(user)}
+                </span>
               </div>
               {accountDeactivated ? (
                 <button
@@ -1486,6 +1630,182 @@ export default function Home() {
                 </div>
 
                 {error ? <p className="rounded-md border border-red-200 bg-red-50 p-3 text-red-700">{error}</p> : null}
+
+                <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-sm font-semibold text-slate-900">Filters</h2>
+                      <p className="mt-1 text-sm text-slate-600">Filter telemetry by time, user, IP, event, and any recorded field.</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={resetTelemetryFilters}
+                        className="inline-flex h-9 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                      >
+                        Clear
+                      </button>
+                      <button
+                        type="button"
+                        onClick={loadTelemetry}
+                        disabled={loading}
+                        className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                        Apply
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">Time from</span>
+                      <input
+                        type="datetime-local"
+                        value={telemetryFilters.createdFrom}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, createdFrom: event.target.value }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">Time to</span>
+                      <input
+                        type="datetime-local"
+                        value={telemetryFilters.createdTo}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, createdTo: event.target.value }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">User</span>
+                      <input
+                        value={telemetryFilters.user}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, user: event.target.value }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">Display name</span>
+                      <input
+                        value={telemetryFilters.displayName}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, displayName: event.target.value }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">Email</span>
+                      <input
+                        value={telemetryFilters.email}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, email: event.target.value }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">Keycloak ID</span>
+                      <input
+                        value={telemetryFilters.keycloakId}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, keycloakId: event.target.value }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">IP</span>
+                      <input
+                        value={telemetryFilters.ipAddress}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, ipAddress: event.target.value }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">Country</span>
+                      <input
+                        value={telemetryFilters.country}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, country: event.target.value }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">Region</span>
+                      <input
+                        value={telemetryFilters.region}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, region: event.target.value }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">City</span>
+                      <input
+                        value={telemetryFilters.city}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, city: event.target.value }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">Location source</span>
+                      <input
+                        value={telemetryFilters.locationSource}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, locationSource: event.target.value }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">User agent</span>
+                      <input
+                        value={telemetryFilters.userAgent}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, userAgent: event.target.value }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">Method</span>
+                      <input
+                        value={telemetryFilters.method}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, method: event.target.value }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">Path</span>
+                      <input
+                        value={telemetryFilters.path}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, path: event.target.value }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">Status code</span>
+                      <input
+                        value={telemetryFilters.statusCode}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, statusCode: event.target.value.replace(/\D/g, "") }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">Duration min ms</span>
+                      <input
+                        value={telemetryFilters.durationMinMs}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, durationMinMs: event.target.value.replace(/\D/g, "") }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium text-slate-700">Duration max ms</span>
+                      <input
+                        value={telemetryFilters.durationMaxMs}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, durationMaxMs: event.target.value.replace(/\D/g, "") }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm md:col-span-2 xl:col-span-4">
+                      <span className="font-medium text-slate-700">Event type</span>
+                      <input
+                        value={telemetryFilters.eventType}
+                        onChange={(event) => setTelemetryFilters((current) => ({ ...current, eventType: event.target.value }))}
+                        className="h-10 rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500"
+                      />
+                    </label>
+                  </div>
+                </section>
 
                 {canManageTelemetryRetention ? (
                   <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -1550,7 +1870,7 @@ export default function Home() {
                       <tr>
                         {[
                           ["createdAt", "Time"],
-                          ["email", "User"],
+                          ["displayName", "User"],
                           ["ipAddress", "IP"],
                           ["location", "Location"],
                           ["method", "Method"],
@@ -1585,7 +1905,7 @@ export default function Home() {
                         sortedAccessLogs.map((log) => (
                           <tr key={log.id} className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50">
                             <td className="whitespace-nowrap px-3 py-2 text-slate-700">{formatDate(log.createdAt)}</td>
-                            <td className="max-w-56 truncate px-3 py-2 font-medium text-slate-800">{log.email || log.keycloakId || "Anonymous"}</td>
+                            <td className="max-w-56 truncate px-3 py-2 font-medium text-slate-800">{log.displayName || log.email || log.keycloakId || "Anonymous"}</td>
                             <td className="whitespace-nowrap px-3 py-2 text-slate-700">{log.ipAddress || ""}</td>
                             <td className="max-w-56 truncate px-3 py-2 text-slate-700">{formatLocation(log)}</td>
                             <td className="whitespace-nowrap px-3 py-2 font-semibold text-slate-700">{log.method}</td>

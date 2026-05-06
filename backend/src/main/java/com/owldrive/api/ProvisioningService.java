@@ -6,12 +6,12 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
@@ -38,6 +38,7 @@ public class ProvisioningService {
         String keycloakId = jwt.getSubject();
         String username = claim(jwt, "preferred_username", keycloakId);
         String email = requiredEmail(jwt);
+        String displayName = resolveDisplayName(jwt, username, email, keycloakId);
         String role = resolveRole(jwt);
         Long quotaBytes = "ADMIN".equals(role) ? null : DEFAULT_USER_QUOTA_BYTES;
 
@@ -46,7 +47,7 @@ public class ProvisioningService {
             if (existing.get().deactivatedAt() != null) {
                 return existing.get();
             }
-            return updateUser(existing.get().id(), keycloakId, email, username, role, quotaBytes);
+            return updateUser(existing.get().id(), keycloakId, email, username, displayName, role, quotaBytes);
         }
 
         Optional<UserRecord> existingByEmail = findSingleUserByVerifiedEmail(jwt, email);
@@ -54,18 +55,19 @@ public class ProvisioningService {
             if (existingByEmail.get().deactivatedAt() != null) {
                 return existingByEmail.get();
             }
-            return updateUser(existingByEmail.get().id(), keycloakId, email, username, role, quotaBytes);
+            return updateUser(existingByEmail.get().id(), keycloakId, email, username, displayName, role, quotaBytes);
         }
 
         userCapacityService.requireAvailableSlot();
         UserRecord user = jdbc.queryForObject(
                 """
-                INSERT INTO users (keycloak_id, email, username, role, quota_bytes, used_bytes)
-                VALUES (?, ?, ?, ?, ?, 0)
-                RETURNING id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
+                INSERT INTO users (keycloak_id, display_name, email, username, role, quota_bytes, used_bytes)
+                VALUES (?, ?, ?, ?, ?, ?, 0)
+                RETURNING id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
                 """,
                 this::mapUser,
                 keycloakId,
+                displayName,
                 email,
                 username,
                 role,
@@ -79,6 +81,7 @@ public class ProvisioningService {
         String keycloakId = jwt.getSubject();
         String username = claim(jwt, "preferred_username", keycloakId);
         String email = requiredEmail(jwt);
+        String displayName = resolveDisplayName(jwt, username, email, keycloakId);
         String role = resolveRole(jwt);
         Long quotaBytes = "ADMIN".equals(role) ? null : DEFAULT_USER_QUOTA_BYTES;
 
@@ -96,12 +99,13 @@ public class ProvisioningService {
         UserRecord user = jdbc.queryForObject(
                 """
                 UPDATE users
-                SET keycloak_id = ?, email = ?, username = ?, role = ?, quota_bytes = ?, used_bytes = 0, deactivated_at = NULL
+                SET keycloak_id = ?, display_name = ?, email = ?, username = ?, role = ?, quota_bytes = ?, used_bytes = 0, deactivated_at = NULL
                 WHERE id = ?
-                RETURNING id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
+                RETURNING id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
                 """,
                 this::mapUser,
                 keycloakId,
+                displayName,
                 email,
                 username,
                 role,
@@ -111,16 +115,17 @@ public class ProvisioningService {
         return user;
     }
 
-    private UserRecord updateUser(UUID id, String keycloakId, String email, String username, String role, Long quotaBytes) {
+    private UserRecord updateUser(UUID id, String keycloakId, String email, String username, String displayName, String role, Long quotaBytes) {
         UserRecord user = jdbc.queryForObject(
                 """
                 UPDATE users
-                SET keycloak_id = ?, email = ?, username = ?, role = ?, quota_bytes = ?
+                SET keycloak_id = ?, display_name = ?, email = ?, username = ?, role = ?, quota_bytes = ?
                 WHERE id = ? AND deactivated_at IS NULL
-                RETURNING id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
+                RETURNING id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
                 """,
                 this::mapUser,
                 keycloakId,
+                displayName,
                 email,
                 username,
                 role,
@@ -155,7 +160,7 @@ public class ProvisioningService {
     private Optional<UserRecord> findUserByKeycloakId(String keycloakId) {
         return jdbc.query(
                 """
-                SELECT id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
+                SELECT id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
                 FROM users
                 WHERE keycloak_id = ?
                 """,
@@ -172,7 +177,7 @@ public class ProvisioningService {
         }
         var matches = jdbc.query(
                 """
-                SELECT id, keycloak_id, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
+                SELECT id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
                 FROM users
                 WHERE lower(email) = lower(?)
                 """,
@@ -205,6 +210,46 @@ public class ProvisioningService {
         return email;
     }
 
+    private String resolveDisplayName(Jwt jwt, String username, String email, String keycloakId) {
+        String name = trimToNull(jwt.getClaimAsString("name"));
+        if (name != null) {
+            return name;
+        }
+        String givenName = trimToNull(jwt.getClaimAsString("given_name"));
+        String familyName = trimToNull(jwt.getClaimAsString("family_name"));
+        if (givenName != null || familyName != null) {
+            String fullName = ((givenName == null ? "" : givenName) + " " + (familyName == null ? "" : familyName)).trim();
+            if (!fullName.isBlank()) {
+                return fullName;
+            }
+        }
+        String preferredUsername = trimToNull(jwt.getClaimAsString("preferred_username"));
+        if (preferredUsername != null) {
+            return preferredUsername;
+        }
+        if (username != null && !username.isBlank()) {
+            return username;
+        }
+        if (email != null) {
+            int at = email.indexOf('@');
+            if (at > 0) {
+                return email.substring(0, at);
+            }
+            if (!email.isBlank()) {
+                return email;
+            }
+        }
+        return keycloakId;
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     private String resolveRole(Jwt jwt) {
         Object realmAccess = jwt.getClaims().get("realm_access");
         if (realmAccess instanceof Map<?, ?> access) {
@@ -228,6 +273,7 @@ public class ProvisioningService {
         return new UserRecord(
                 rs.getObject("id", UUID.class),
                 rs.getString("keycloak_id"),
+                rs.getString("display_name"),
                 rs.getString("email"),
                 rs.getString("username"),
                 rs.getString("role"),

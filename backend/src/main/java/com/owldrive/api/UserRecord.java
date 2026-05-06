@@ -6,6 +6,7 @@ import java.util.UUID;
 public record UserRecord(
         UUID id,
         String keycloakId,
+        String displayName,
         String email,
         String username,
         String role,

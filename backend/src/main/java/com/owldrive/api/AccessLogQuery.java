@@ -1,26 +1,25 @@
 package com.owldrive.api;
 
 import java.time.OffsetDateTime;
-import java.util.UUID;
 
-public record AccessLogRecord(
-        UUID id,
-        UUID userId,
+public record AccessLogQuery(
+        int limit,
+        OffsetDateTime createdFrom,
+        OffsetDateTime createdTo,
+        String user,
         String displayName,
-        String keycloakId,
         String email,
+        String keycloakId,
         String ipAddress,
         String country,
         String region,
         String city,
-        Double latitude,
-        Double longitude,
         String locationSource,
         String userAgent,
         String method,
         String path,
         Integer statusCode,
-        long durationMs,
-        String eventType,
-        OffsetDateTime createdAt
+        Long durationMinMs,
+        Long durationMaxMs,
+        String eventType
 ) {}
