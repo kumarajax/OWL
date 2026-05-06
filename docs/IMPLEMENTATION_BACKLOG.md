@@ -7,7 +7,7 @@
 - Create personal tenant and root folder on first login.
 - Implement folder list/create/rename/move/delete.
 - Implement resumable upload session.
-- Implement chunk encryption and storage-node write path.
+- Implement chunk encryption and MinIO write path.
 - Implement download reassembly.
 - Emit audit events.
 
@@ -48,4 +48,3 @@
 - Load tests.
 - Chaos tests for disk/node failure.
 - Kubernetes manifests.
-
