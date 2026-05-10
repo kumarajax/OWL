@@ -24,6 +24,7 @@ __pycache__/
 # Data / storage (VERY IMPORTANT)
 data/
 storage/
+docker-compose.override.yml
 
 # IDE
 .vscode/
