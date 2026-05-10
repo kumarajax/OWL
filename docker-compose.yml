@@ -20,7 +20,7 @@ services:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - minio-data:/data
+      - /run/media/ajay/2e93b034-de3a-4ae9-93bc-e91d208c66a4/OWL_STORAGE:/data
 
   keycloak-db-init:
     image: postgres:16
@@ -88,4 +88,3 @@ services:
 
 volumes:
   postgres-data:
-  minio-data:
