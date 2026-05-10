@@ -11,7 +11,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 ROOT_PATHS=()
-while IFS= read -r line; do
+while IFS= read -r line || [ -n "$line" ]; do
   line="${line%$'\r'}"
   line="${line#"${line%%[![:space:]]*}"}"
   line="${line%"${line##*[![:space:]]}"}"
