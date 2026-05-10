@@ -2,6 +2,7 @@ package com.owldrive.api;
 
 import java.util.UUID;
 import java.util.Map;
+import java.util.List;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
@@ -30,11 +31,12 @@ public class FileController {
     }
 
     @PostMapping("/upload")
-    FileRecord upload(
+    List<FileRecord> upload(
             @AuthenticationPrincipal Jwt jwt,
             @RequestParam("parentFolderId") UUID parentFolderId,
-            @RequestParam("file") MultipartFile file) {
-        return fileService.upload(jwt, parentFolderId, file);
+            @RequestParam("file") List<MultipartFile> files,
+            @RequestParam(value = "relativePath", required = false) String relativePath) {
+        return fileService.upload(jwt, parentFolderId, files, relativePath);
     }
 
     @GetMapping("/{fileId}/download")

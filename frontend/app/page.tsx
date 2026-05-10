@@ -450,7 +450,10 @@ export default function Home() {
   const [savingTelemetryRetention, setSavingTelemetryRetention] = useState(false);
   const [accessLogSortKey, setAccessLogSortKey] = useState<AccessLogSortKey>("createdAt");
   const [accessLogSortDirection, setAccessLogSortDirection] = useState<"asc" | "desc">("desc");
+  const [pendingUploads, setPendingUploads] = useState<File[]>([]);
+  const [uploadProgressLabel, setUploadProgressLabel] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
   const shareLinkInputRef = useRef<HTMLInputElement | null>(null);
   const keycloakBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_KEYCLOAK_URL, 8080);
   const apiBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL, 8081);
@@ -487,6 +490,13 @@ export default function Home() {
     }
   }, [registrationStatus, authMode]);
 
+  useEffect(() => {
+    if (folderInputRef.current) {
+      folderInputRef.current.setAttribute("webkitdirectory", "");
+      folderInputRef.current.setAttribute("directory", "");
+    }
+  }, []);
+
   function clearSession(message = "") {
     localStorage.removeItem("owl_access_token");
     localStorage.removeItem("owl_id_token");
@@ -512,6 +522,8 @@ export default function Home() {
     setTelemetryRetentionInput(String(defaultTelemetryRetentionRows));
     setSavingTelemetryRetention(false);
     setAccessLogs([]);
+    setPendingUploads([]);
+    setUploadProgressLabel("");
     setTelemetryFilters({
       createdFrom: "",
       createdTo: "",
@@ -532,6 +544,23 @@ export default function Home() {
       durationMaxMs: "",
       eventType: ""
     });
+  }
+
+  function fileUploadKey(file: File) {
+    return `${file.webkitRelativePath || file.name}::${file.size}::${file.lastModified}::${file.type}`;
+  }
+
+  function mergePendingUploads(existing: File[], incoming: File[]) {
+    const seen = new Set(existing.map(fileUploadKey));
+    const merged = [...existing];
+    incoming.forEach((file) => {
+      const key = fileUploadKey(file);
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push(file);
+      }
+    });
+    return merged;
   }
 
   function handleRequestError(err: unknown, fallback: string) {
@@ -937,28 +966,57 @@ export default function Home() {
     }
   }
 
-  async function uploadFile(event: ChangeEvent<HTMLInputElement>) {
-    if (!bearerHeaders || !currentFolder) return;
-    const selectedFile = event.target.files?.[0];
+  async function queueFiles(event: ChangeEvent<HTMLInputElement>) {
+    const selectedFiles = Array.from(event.target.files ?? []);
     event.target.value = "";
-    if (!selectedFile) return;
+    if (selectedFiles.length === 0) return;
+    setPendingUploads((existing) => mergePendingUploads(existing, selectedFiles));
+  }
 
-    const form = new FormData();
-    form.append("parentFolderId", currentFolder.id);
-    form.append("file", selectedFile);
+  async function queueFolder(event: ChangeEvent<HTMLInputElement>) {
+    const selectedFiles = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (selectedFiles.length === 0) return;
+    setPendingUploads((existing) => mergePendingUploads(existing, selectedFiles));
+  }
+
+  function removePendingUpload(file: File) {
+    const key = fileUploadKey(file);
+    setPendingUploads((existing) => existing.filter((item) => fileUploadKey(item) !== key));
+  }
+
+  function clearPendingUploads() {
+    setPendingUploads([]);
+  }
+
+  async function uploadPendingFiles() {
+    if (!bearerHeaders || !currentFolder || pendingUploads.length === 0) return;
+    const filesToUpload = [...pendingUploads];
     setUploading(true);
+    setUploadProgressLabel(`Uploading 0 of ${filesToUpload.length}`);
     setError("");
     try {
-      const response = await fetch(`${apiBaseUrl}/api/files/upload`, {
-        method: "POST",
-        headers: bearerHeaders,
-        body: form
-      });
-      await readJson(response);
+      for (let index = 0; index < filesToUpload.length; index += 1) {
+        const file = filesToUpload[index];
+        setUploadProgressLabel(`Uploading ${index + 1} of ${filesToUpload.length}: ${file.name}`);
+        const form = new FormData();
+        form.append("parentFolderId", currentFolder.id);
+        form.append("file", file);
+        form.append("relativePath", file.webkitRelativePath || file.name);
+        const response = await fetch(`${apiBaseUrl}/api/files/upload`, {
+          method: "POST",
+          headers: bearerHeaders,
+          body: form
+        });
+        await readJson(response);
+      }
+      setPendingUploads([]);
+      setUploadProgressLabel("");
       await loadChildren(currentFolder);
       await refreshStorage();
     } catch (err) {
       handleRequestError(err, "Unable to upload file");
+      setUploadProgressLabel("");
     } finally {
       setUploading(false);
     }
@@ -2070,14 +2128,48 @@ export default function Home() {
                 >
                   <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                 </button>
-                <input ref={fileInputRef} type="file" className="hidden" onChange={uploadFile} />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  className="absolute -left-[9999px] h-px w-px opacity-0"
+                  tabIndex={-1}
+                  onChange={queueFiles}
+                />
+                <input
+                  ref={folderInputRef}
+                  type="file"
+                  multiple
+                  className="absolute -left-[9999px] h-px w-px opacity-0"
+                  tabIndex={-1}
+                  {...({ webkitdirectory: "", directory: "" } as any)}
+                  onChange={queueFolder}
+                />
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   disabled={!currentFolder || loading || uploading}
                   className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 font-semibold disabled:opacity-50"
                 >
                   <Upload className="h-4 w-4" />
-                  {uploading ? "Uploading" : "Upload File"}
+                  Add Files
+                </button>
+                <button
+                  onClick={() => folderInputRef.current?.click()}
+                  disabled={!currentFolder || loading || uploading}
+                  className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 font-semibold disabled:opacity-50"
+                >
+                  <Folder className="h-4 w-4" />
+                  Add Folder
+                </button>
+                <button
+                  onClick={uploadPendingFiles}
+                  disabled={!currentFolder || loading || uploading || pendingUploads.length === 0}
+                  className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-600 px-4 font-semibold text-white disabled:opacity-50"
+                >
+                  <Upload className="h-4 w-4" />
+                  {uploading
+                    ? uploadProgressLabel || `Uploading (${pendingUploads.length})`
+                    : `Upload (${pendingUploads.length})`}
                 </button>
                 <button
                   onClick={createFolder}
@@ -2091,6 +2183,45 @@ export default function Home() {
             </div>
 
             {error ? <p className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-red-700">{error}</p> : null}
+
+            {pendingUploads.length > 0 ? (
+              <div className="mb-4 rounded-md border border-slate-200 bg-white p-3 shadow-sm">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-slate-700">
+                    {pendingUploads.length} file{pendingUploads.length === 1 ? "" : "s"} queued
+                  </p>
+                  <button
+                    type="button"
+                    onClick={clearPendingUploads}
+                    disabled={uploading}
+                    className="inline-flex h-8 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium disabled:opacity-50"
+                  >
+                    Clear
+                  </button>
+                </div>
+                {uploadProgressLabel ? (
+                  <p className="mb-2 text-xs font-medium text-slate-500">{uploadProgressLabel}</p>
+                ) : null}
+                <div className="max-h-40 overflow-y-auto">
+                  <ul className="space-y-1 text-sm text-slate-600">
+                    {pendingUploads.map((file) => (
+                      <li key={fileUploadKey(file)} className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2">
+                        <span className="min-w-0 truncate">{file.webkitRelativePath || file.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => removePendingUpload(file)}
+                          disabled={uploading}
+                          className="text-slate-500 hover:text-slate-900 disabled:opacity-50"
+                          title="Remove file from queue"
+                        >
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            ) : null}
 
             {selectedFileIds.size > 0 ? (
               <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-white p-3 text-sm shadow-sm">

@@ -96,6 +96,18 @@ public class FolderService {
     }
 
     @Transactional
+    FolderRecord resolveOrCreateFolderPath(UserRecord user, UUID baseFolderId, List<String> pathSegments) {
+        FolderRecord current = requireOwnedActiveFolder(user, baseFolderId);
+        if (pathSegments == null || pathSegments.isEmpty()) {
+            return current;
+        }
+        for (String rawSegment : pathSegments) {
+            current = getOrCreateChildFolder(user, current.id(), rawSegment);
+        }
+        return current;
+    }
+
+    @Transactional
     public FolderRecord update(Jwt jwt, UUID folderId, Map<String, Object> request) {
         UserRecord user = provisioningService.ensureUser(jwt);
         FolderRecord folder = requireOwnedActiveFolder(user, folderId);
@@ -278,12 +290,60 @@ public class FolderService {
         return folder;
     }
 
+    private FolderRecord getOrCreateChildFolder(UserRecord user, UUID parentId, String rawName) {
+        String name = validateName(rawName);
+        FolderRecord existing = findActiveChildFolder(user.id(), parentId, name);
+        if (existing != null) {
+            return existing;
+        }
+        try {
+            return jdbc.queryForObject(
+                    """
+                    INSERT INTO folders (name, owner_id, parent_id)
+                    VALUES (?, ?, ?)
+                    RETURNING id, name, owner_id, parent_id, created_at, updated_at, deleted_at
+                    """,
+                    this::mapFolder,
+                    name,
+                    user.id(),
+                    parentId);
+        } catch (DataIntegrityViolationException ex) {
+            FolderRecord retry = findActiveChildFolder(user.id(), parentId, name);
+            if (retry != null) {
+                return retry;
+            }
+            throw badRequest("A folder with this name already exists here");
+        }
+    }
+
+    private FolderRecord findActiveChildFolder(UUID ownerId, UUID parentId, String name) {
+        return jdbc.query(
+                """
+                SELECT id, name, owner_id, parent_id, created_at, updated_at, deleted_at
+                FROM folders
+                WHERE owner_id = ?
+                  AND parent_id = ?
+                  AND deleted_at IS NULL
+                  AND lower(name) = lower(?)
+                """,
+                this::mapFolder,
+                ownerId,
+                parentId,
+                name).stream().findFirst().orElse(null);
+    }
+
     private String validateName(String rawName) {
         if (rawName == null) {
             throw badRequest("Folder name is required");
         }
         String name = rawName.trim();
         if (name.isEmpty()) {
+            throw badRequest("Folder name is required");
+        }
+        if (name.equals(".") || name.equals("..")) {
+            throw badRequest("Folder name is required");
+        }
+        if (name.contains("/") || name.contains("\\")) {
             throw badRequest("Folder name is required");
         }
         if (name.length() > 255) {

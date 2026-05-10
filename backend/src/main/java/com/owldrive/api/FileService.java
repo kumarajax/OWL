@@ -4,7 +4,9 @@ import java.io.IOException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Map;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -47,54 +49,32 @@ public class FileService {
     }
 
     @Transactional
-    public FileRecord upload(Jwt jwt, UUID parentFolderId, MultipartFile upload) {
+    public List<FileRecord> upload(Jwt jwt, UUID parentFolderId, List<MultipartFile> uploads, String relativePath) {
+        if (uploads == null || uploads.isEmpty()) {
+            throw badRequest("file is required");
+        }
         UserRecord user = provisioningService.ensureUser(jwt);
         if (parentFolderId == null) {
             throw badRequest("parentFolderId is required");
         }
         folderService.requireOwnedActiveFolder(user, parentFolderId);
+        List<FileRecord> createdFiles = new ArrayList<>();
+        for (int index = 0; index < uploads.size(); index += 1) {
+            MultipartFile upload = uploads.get(index);
+            createdFiles.add(uploadSingle(user, parentFolderId, upload, relativePath));
+        }
+        return createdFiles;
+    }
+
+    private FileRecord uploadSingle(UserRecord user, UUID parentFolderId, MultipartFile upload, String relativePath) {
         validateUpload(upload);
-
-        String originalName = sanitizeDisplayName(upload.getOriginalFilename());
-        rejectDuplicateFileName(user.id(), parentFolderId, originalName);
-
-        UUID fileId = UUID.randomUUID();
-        StoredFile storedFile;
-        try {
-            storedFile = objectStorageService.store(user.id(), fileId, upload);
-        } catch (IOException ex) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to store file", ex);
+        UploadPath uploadPath = parseUploadPath(relativePath, upload.getOriginalFilename());
+        FolderRecord destinationFolder = folderService.resolveOrCreateFolderPath(user, parentFolderId, uploadPath.folderSegments());
+        FileRecord existing = findActiveFileByName(user.id(), destinationFolder.id(), uploadPath.fileName());
+        if (existing != null) {
+            return overwriteExistingFile(user, existing, uploadPath.fileName(), upload);
         }
-
-        try {
-            reserveUserStorage(user, storedFile.sizeBytes());
-            return jdbc.queryForObject(
-                    """
-                    INSERT INTO files (
-                      id, owner_id, parent_folder_id, original_name, storage_key,
-                      content_type, size_bytes, checksum_sha256
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    RETURNING id, owner_id, parent_folder_id, original_name, storage_key,
-                              content_type, size_bytes, checksum_sha256,
-                              created_at, updated_at, deleted_at
-                    """,
-                    this::mapFile,
-                    fileId,
-                    user.id(),
-                    parentFolderId,
-                    originalName,
-                    storedFile.storageKey(),
-                    contentType(upload),
-                    storedFile.sizeBytes(),
-                    storedFile.checksumSha256());
-        } catch (DataIntegrityViolationException ex) {
-            deleteStoredBytesQuietly(storedFile);
-            throw badRequest("A file with this name already exists here");
-        } catch (ResponseStatusException ex) {
-            deleteStoredBytesQuietly(storedFile);
-            throw ex;
-        }
+        return createNewFile(user, destinationFolder.id(), uploadPath.fileName(), upload);
     }
 
     @Transactional(readOnly = true)
@@ -147,6 +127,107 @@ public class FileService {
         }
     }
 
+    private FileRecord createNewFile(UserRecord user, UUID parentFolderId, String originalName, MultipartFile upload) {
+        UUID fileId = UUID.randomUUID();
+        StoredFile storedFile;
+        try {
+            storedFile = objectStorageService.store(user.id(), fileId, upload);
+        } catch (IOException ex) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to store file", ex);
+        }
+
+        try {
+            reserveUserStorage(user, storedFile.sizeBytes());
+            return insertFileRecord(user, parentFolderId, fileId, originalName, upload, storedFile);
+        } catch (DataIntegrityViolationException ex) {
+            FileRecord existing = findActiveFileByName(user.id(), parentFolderId, originalName);
+            if (existing != null) {
+                adjustUserStorage(user, -existing.sizeBytes());
+                return overwriteStoredBytes(user, existing, originalName, upload, storedFile);
+            }
+            deleteStoredBytesQuietly(storedFile);
+            throw badRequest("A file with this name already exists here");
+        } catch (ResponseStatusException ex) {
+            deleteStoredBytesQuietly(storedFile);
+            throw ex;
+        }
+    }
+
+    private FileRecord overwriteExistingFile(UserRecord user, FileRecord existingFile, String originalName, MultipartFile upload) {
+        UUID fileId = UUID.randomUUID();
+        StoredFile storedFile;
+        try {
+            storedFile = objectStorageService.store(user.id(), fileId, upload);
+        } catch (IOException ex) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to store file", ex);
+        }
+        try {
+            adjustUserStorage(user, storedFile.sizeBytes() - existingFile.sizeBytes());
+            return overwriteStoredBytes(user, existingFile, originalName, upload, storedFile);
+        } catch (ResponseStatusException ex) {
+            deleteStoredBytesQuietly(storedFile);
+            throw ex;
+        }
+    }
+
+    private FileRecord overwriteStoredBytes(UserRecord user, FileRecord existingFile, String originalName, MultipartFile upload, StoredFile storedFile) {
+        try {
+            FileRecord updated = jdbc.queryForObject(
+                    """
+                    UPDATE files
+                    SET storage_key = ?, content_type = ?, size_bytes = ?, checksum_sha256 = ?,
+                        original_name = ?, updated_at = now()
+                    WHERE id = ? AND owner_id = ? AND deleted_at IS NULL
+                    RETURNING id, owner_id, parent_folder_id, original_name, storage_key,
+                              content_type, size_bytes, checksum_sha256,
+                              created_at, updated_at, deleted_at
+                    """,
+                    this::mapFile,
+                    storedFile.storageKey(),
+                    contentType(upload),
+                    storedFile.sizeBytes(),
+                    storedFile.checksumSha256(),
+                    originalName,
+                    existingFile.id(),
+                    user.id());
+            deleteStoredBytesAfterCommit(existingFile);
+            return updated;
+        } catch (DataIntegrityViolationException ex) {
+            deleteStoredBytesQuietly(storedFile);
+            throw badRequest("A file with this name already exists here");
+        } catch (ResponseStatusException ex) {
+            deleteStoredBytesQuietly(storedFile);
+            throw ex;
+        }
+    }
+
+    private FileRecord insertFileRecord(UserRecord user, UUID parentFolderId, UUID fileId, String originalName, MultipartFile upload, StoredFile storedFile) {
+        try {
+            return jdbc.queryForObject(
+                    """
+                    INSERT INTO files (
+                      id, owner_id, parent_folder_id, original_name, storage_key,
+                      content_type, size_bytes, checksum_sha256
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    RETURNING id, owner_id, parent_folder_id, original_name, storage_key,
+                              content_type, size_bytes, checksum_sha256,
+                              created_at, updated_at, deleted_at
+                    """,
+                    this::mapFile,
+                    fileId,
+                    user.id(),
+                    parentFolderId,
+                    originalName,
+                    storedFile.storageKey(),
+                    contentType(upload),
+                    storedFile.sizeBytes(),
+                    storedFile.checksumSha256());
+        } catch (DataIntegrityViolationException ex) {
+            throw ex;
+        }
+    }
+
     @Transactional
     public void delete(Jwt jwt, UUID fileId) {
         UserRecord user = provisioningService.ensureUser(jwt);
@@ -164,17 +245,22 @@ public class FileService {
     }
 
     private void reserveUserStorage(UserRecord user, long sizeBytes) {
+        adjustUserStorage(user, sizeBytes);
+    }
+
+    private void adjustUserStorage(UserRecord user, long deltaBytes) {
         int updated = jdbc.update(
                 """
                 UPDATE users
                 SET used_bytes = used_bytes + ?
                 WHERE id = ?
                   AND deactivated_at IS NULL
-                  AND (quota_bytes IS NULL OR used_bytes + ? <= quota_bytes)
+                  AND (? <= 0 OR quota_bytes IS NULL OR used_bytes + ? <= quota_bytes)
                 """,
-                sizeBytes,
+                deltaBytes,
                 user.id(),
-                sizeBytes);
+                deltaBytes,
+                deltaBytes);
         if (updated != 1) {
             throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "Storage quota exceeded");
         }
@@ -212,6 +298,29 @@ public class FileService {
         }
     }
 
+    private FileRecord findActiveFileByName(UUID ownerId, UUID parentFolderId, String originalName) {
+        return jdbc.query(
+                """
+                SELECT id, owner_id, parent_folder_id, original_name, storage_key, content_type,
+                       size_bytes, checksum_sha256, created_at, updated_at, deleted_at
+                FROM files
+                WHERE owner_id = ?
+                  AND parent_folder_id = ?
+                  AND deleted_at IS NULL
+                  AND lower(original_name) = lower(?)
+                """,
+                this::mapFile,
+                ownerId,
+                parentFolderId,
+                originalName).stream().findFirst().orElse(null);
+    }
+
+    private void rejectDuplicateFileName(UUID ownerId, UUID parentFolderId, String originalName) {
+        if (findActiveFileByName(ownerId, parentFolderId, originalName) != null) {
+            throw badRequest("A file with this name already exists here");
+        }
+    }
+
     private FileRecord requireOwnedActiveFile(UserRecord user, UUID fileId) {
         FileRecord file = jdbc.query(
                 """
@@ -245,25 +354,6 @@ public class FileService {
         sanitizeDisplayName(upload.getOriginalFilename());
     }
 
-    private void rejectDuplicateFileName(UUID ownerId, UUID parentFolderId, String originalName) {
-        Integer count = jdbc.queryForObject(
-                """
-                SELECT count(*)
-                FROM files
-                WHERE owner_id = ?
-                  AND parent_folder_id = ?
-                  AND deleted_at IS NULL
-                  AND lower(original_name) = lower(?)
-                """,
-                Integer.class,
-                ownerId,
-                parentFolderId,
-                originalName);
-        if (count != null && count > 0) {
-            throw badRequest("A file with this name already exists here");
-        }
-    }
-
     private String sanitizeDisplayName(String rawName) {
         String name = rawName == null ? "download" : rawName.replace("\\", "/");
         int slash = name.lastIndexOf('/');
@@ -278,6 +368,30 @@ public class FileService {
             throw badRequest("Filename must be 255 characters or fewer");
         }
         return name;
+    }
+
+    private UploadPath parseUploadPath(String relativePath, String fallbackName) {
+        String candidate = relativePath == null || relativePath.isBlank() ? fallbackName : relativePath;
+        String normalized = candidate == null ? "" : candidate.replace("\\", "/");
+        List<String> segments = new ArrayList<>();
+        for (String rawSegment : normalized.split("/")) {
+            String segment = rawSegment == null ? "" : rawSegment.trim();
+            if (segment.isEmpty()) {
+                continue;
+            }
+            if (segment.equals(".") || segment.equals("..")) {
+                throw badRequest("Invalid upload path");
+            }
+            if (segment.length() > 255) {
+                throw badRequest("Path segment must be 255 characters or fewer");
+            }
+            segments.add(segment);
+        }
+        if (segments.isEmpty()) {
+            throw badRequest("Filename is required");
+        }
+        String fileName = sanitizeDisplayName(segments.remove(segments.size() - 1));
+        return new UploadPath(List.copyOf(segments), fileName);
     }
 
     private String contentType(MultipartFile upload) {
@@ -300,6 +414,8 @@ public class FileService {
     private ResponseStatusException notFound(String message) {
         return new ResponseStatusException(HttpStatus.NOT_FOUND, message);
     }
+
+    private record UploadPath(List<String> folderSegments, String fileName) {}
 
     private FileRecord mapFile(ResultSet rs, int rowNum) throws SQLException {
         return new FileRecord(
