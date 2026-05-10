@@ -7,7 +7,7 @@
 - Create personal tenant and root folder on first login.
 - Implement folder list/create/rename/move/delete.
 - Implement resumable upload session.
-- Implement chunk encryption and MinIO write path.
+- Implement chunk encryption and local disk write path.
 - Implement download reassembly.
 - Emit audit events.
 

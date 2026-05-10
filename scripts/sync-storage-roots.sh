@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CONFIG_FILE="$ROOT_DIR/infra/minio/extra-drives.conf"
+CONFIG_FILE="$ROOT_DIR/infra/storage-roots.conf"
 OUTPUT_FILE="$ROOT_DIR/docker-compose.override.yml"
 
 if [ ! -f "$CONFIG_FILE" ]; then
@@ -10,7 +10,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
   exit 0
 fi
 
-DRIVE_PATHS=()
+ROOT_PATHS=()
 while IFS= read -r line; do
   line="${line%$'\r'}"
   line="${line#"${line%%[![:space:]]*}"}"
@@ -18,15 +18,15 @@ while IFS= read -r line; do
   if [ -z "$line" ] || [ "${line#\#}" != "$line" ]; then
     continue
   fi
-  DRIVE_PATHS+=("$line")
+  ROOT_PATHS+=("$line")
 done < "$CONFIG_FILE"
 
-if [ "${#DRIVE_PATHS[@]}" -eq 0 ]; then
+if [ "${#ROOT_PATHS[@]}" -eq 0 ]; then
   rm -f "$OUTPUT_FILE"
   exit 0
 fi
 
-python3 - "$ROOT_DIR" "$OUTPUT_FILE" "${DRIVE_PATHS[@]}" <<'PY'
+python3 - "$ROOT_DIR" "$OUTPUT_FILE" "${ROOT_PATHS[@]}" <<'PY'
 import pathlib
 import sys
 
@@ -38,6 +38,7 @@ def quote(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 resolved = []
+seen = set()
 for raw in raw_paths:
     path = pathlib.Path(raw).expanduser()
     if not path.is_absolute():
@@ -45,30 +46,23 @@ for raw in raw_paths:
     else:
         path = path.resolve()
     if not path.exists():
-        raise SystemExit(f"Configured MinIO drive path does not exist: {path}")
+        raise SystemExit(f"Configured storage root does not exist: {path}")
     if not path.is_dir():
-        raise SystemExit(f"Configured MinIO drive path is not a directory: {path}")
-    resolved.append(str(path))
-
-container_paths = ["/data"] + [f"/minio-drives/disk-{index}" for index in range(1, len(resolved) + 1)]
+        raise SystemExit(f"Configured storage root is not a directory: {path}")
+    text = str(path)
+    if text in seen:
+        continue
+    seen.add(text)
+    resolved.append(text)
 
 lines = [
     "services:",
-    "  minio:",
-    "    command:",
-    '      ["server"',
+    "  backend:",
+    "    volumes:",
 ]
 
-for container_path in container_paths:
-    lines[-1] += f', "{quote(container_path)}"'
-
-lines[-1] += ', "--console-address", ":9001"]'
-lines.extend([
-    "    volumes:",
-])
-
-for index, path in enumerate(resolved, start=1):
-    lines.append(f'      - "{quote(path)}:/minio-drives/disk-{index}"')
+for path in resolved:
+    lines.append(f'      - "{quote(path)}:{quote(path)}"')
 
 lines.append("")
 output_file.write_text("\n".join(lines), encoding="utf-8")

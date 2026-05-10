@@ -134,20 +134,25 @@ When an access token expires, the frontend clears the local session and returns 
 
 ## Object Storage
 
-OWL Drive stores file bytes in MinIO and keeps file metadata in Postgres.
+OWL Drive stores file bytes on disk and keeps file metadata in Postgres.
 
-The default local MinIO settings are:
+The drive list lives in one file:
 
-```yaml
-app.storage.minio.endpoint: http://localhost:9000
-app.storage.minio.access-key: minioadmin
-app.storage.minio.secret-key: minioadmin
-app.storage.minio.bucket: owl-drive
-spring.servlet.multipart.max-file-size: 1GB
-spring.servlet.multipart.max-request-size: 1GB
-app.storage.max-upload-bytes: 1073741824
-app.storage.reject-empty-files: true
+```text
+infra/storage-roots.conf
 ```
+
+Add one absolute host path per line. The backend reads that file, and the Docker helper script turns it into container mounts automatically.
+
+After changing the file, rerun `./scripts/sync-storage-roots.sh` or `./scripts/dev-up.sh` before restarting the stack.
+
+The backend also keeps a local fallback disk at:
+
+```text
+./backend/data/storage
+```
+
+The upload limits can be overridden with:
 
 The upload limits can be overridden with:
 
@@ -376,7 +381,7 @@ Deleted files remain in `app.files` with `deleted_at` populated and do not appea
 - Migration: `backend/src/main/resources/db/migration/V3__phase3_files.sql`
 - File API: `backend/src/main/java/com/owldrive/api/FileController.java`
 - File logic: `backend/src/main/java/com/owldrive/api/FileService.java`
-- Object storage: `backend/src/main/java/com/owldrive/api/MinioObjectStorageService.java`
+- Object storage: `backend/src/main/java/com/owldrive/api/LocalStorageService.java`
 - File records: `backend/src/main/java/com/owldrive/api/FileRecord.java`, `backend/src/main/java/com/owldrive/api/DriveItemRecord.java`, `backend/src/main/java/com/owldrive/api/DownloadableFile.java`, `backend/src/main/java/com/owldrive/api/StoredFile.java`
 - Folder listing update: `backend/src/main/java/com/owldrive/api/FolderService.java`, `backend/src/main/java/com/owldrive/api/FolderController.java`
 - Storage config: `backend/src/main/resources/application.yml`
