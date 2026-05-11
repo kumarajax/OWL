@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowLeft,
@@ -452,9 +452,13 @@ export default function Home() {
   const [accessLogSortDirection, setAccessLogSortDirection] = useState<"asc" | "desc">("desc");
   const [pendingUploads, setPendingUploads] = useState<File[]>([]);
   const [uploadProgressLabel, setUploadProgressLabel] = useState("");
+  const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const shareLinkInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingUploadsRef = useRef<File[]>([]);
+  const uploadingRef = useRef(false);
+  const dragDepthRef = useRef(0);
   const keycloakBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_KEYCLOAK_URL, 8080);
   const apiBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL, 8081);
 
@@ -497,6 +501,10 @@ export default function Home() {
     }
   }, []);
 
+  useEffect(() => {
+    pendingUploadsRef.current = pendingUploads;
+  }, [pendingUploads]);
+
   function clearSession(message = "") {
     localStorage.removeItem("owl_access_token");
     localStorage.removeItem("owl_id_token");
@@ -524,6 +532,7 @@ export default function Home() {
     setAccessLogs([]);
     setPendingUploads([]);
     setUploadProgressLabel("");
+    setDragActive(false);
     setTelemetryFilters({
       createdFrom: "",
       createdTo: "",
@@ -561,6 +570,19 @@ export default function Home() {
       }
     });
     return merged;
+  }
+
+  function setPendingUploadsAndRef(next: File[]) {
+    pendingUploadsRef.current = next;
+    setPendingUploads(next);
+  }
+
+  function appendPendingUploads(incoming: File[]) {
+    const merged = mergePendingUploads(pendingUploadsRef.current, incoming);
+    setPendingUploadsAndRef(merged);
+    if (!uploadingRef.current) {
+      void uploadPendingFiles();
+    }
   }
 
   function handleRequestError(err: unknown, fallback: string) {
@@ -970,14 +992,14 @@ export default function Home() {
     const selectedFiles = Array.from(event.target.files ?? []);
     event.target.value = "";
     if (selectedFiles.length === 0) return;
-    setPendingUploads((existing) => mergePendingUploads(existing, selectedFiles));
+    appendPendingUploads(selectedFiles);
   }
 
   async function queueFolder(event: ChangeEvent<HTMLInputElement>) {
     const selectedFiles = Array.from(event.target.files ?? []);
     event.target.value = "";
     if (selectedFiles.length === 0) return;
-    setPendingUploads((existing) => mergePendingUploads(existing, selectedFiles));
+    appendPendingUploads(selectedFiles);
   }
 
   function removePendingUpload(file: File) {
@@ -985,41 +1007,137 @@ export default function Home() {
     setPendingUploads((existing) => existing.filter((item) => fileUploadKey(item) !== key));
   }
 
-  function clearPendingUploads() {
-    setPendingUploads([]);
-  }
-
   async function uploadPendingFiles() {
-    if (!bearerHeaders || !currentFolder || pendingUploads.length === 0) return;
-    const filesToUpload = [...pendingUploads];
+    if (!bearerHeaders || !currentFolder || loading || uploadingRef.current) return;
+    uploadingRef.current = true;
     setUploading(true);
-    setUploadProgressLabel(`Uploading 0 of ${filesToUpload.length}`);
     setError("");
     try {
-      for (let index = 0; index < filesToUpload.length; index += 1) {
-        const file = filesToUpload[index];
-        setUploadProgressLabel(`Uploading ${index + 1} of ${filesToUpload.length}: ${file.name}`);
-        const form = new FormData();
-        form.append("parentFolderId", currentFolder.id);
-        form.append("file", file);
-        form.append("relativePath", file.webkitRelativePath || file.name);
-        const response = await fetch(`${apiBaseUrl}/api/files/upload`, {
-          method: "POST",
-          headers: bearerHeaders,
-          body: form
-        });
-        await readJson(response);
+      while (pendingUploadsRef.current.length > 0) {
+        const filesToUpload = [...pendingUploadsRef.current];
+        setUploadProgressLabel(`Uploading 0 of ${filesToUpload.length}`);
+        for (let index = 0; index < filesToUpload.length; index += 1) {
+          const file = filesToUpload[index];
+          setUploadProgressLabel(`Uploading ${index + 1} of ${filesToUpload.length}: ${file.name}`);
+          const form = new FormData();
+          form.append("parentFolderId", currentFolder.id);
+          form.append("file", file);
+          form.append("relativePath", file.webkitRelativePath || file.name);
+          const response = await fetch(`${apiBaseUrl}/api/files/upload`, {
+            method: "POST",
+            headers: bearerHeaders,
+            body: form
+          });
+          await readJson(response);
+          const nextQueue = pendingUploadsRef.current.filter((item) => fileUploadKey(item) !== fileUploadKey(file));
+          setPendingUploadsAndRef(nextQueue);
+          if (!currentFolder) return;
+        }
       }
-      setPendingUploads([]);
       setUploadProgressLabel("");
       await loadChildren(currentFolder);
       await refreshStorage();
     } catch (err) {
       handleRequestError(err, "Unable to upload file");
-      setUploadProgressLabel("");
+      if (pendingUploadsRef.current.length > 0) {
+        setUploadProgressLabel(`Upload paused with ${pendingUploadsRef.current.length} file${pendingUploadsRef.current.length === 1 ? "" : "s"} queued`);
+      } else {
+        setUploadProgressLabel("");
+      }
     } finally {
+      uploadingRef.current = false;
       setUploading(false);
     }
+  }
+
+  async function addDraggedFiles(dataTransfer: DataTransfer) {
+    const files = await extractDroppedFiles(dataTransfer);
+    if (files.length === 0) return;
+    appendPendingUploads(files);
+  }
+
+  async function extractDroppedFiles(dataTransfer: DataTransfer) {
+    const items = Array.from(dataTransfer.items ?? []);
+    if (items.length === 0) return Array.from(dataTransfer.files ?? []);
+
+    const collected: File[] = [];
+    for (const item of items) {
+      const entry = (item as any).webkitGetAsEntry?.();
+      if (entry) {
+        const entryFiles = await walkDroppedEntry(entry);
+        collected.push(...entryFiles);
+        continue;
+      }
+      const file = item.getAsFile?.();
+      if (file) {
+        collected.push(file);
+      }
+    }
+    return collected;
+  }
+
+  async function walkDroppedEntry(entry: any, prefix = ""): Promise<File[]> {
+    if (entry.isFile) {
+      return await new Promise<File[]>((resolve) => {
+        entry.file((file: File) => {
+          const fullPath = `${prefix}${file.name}`;
+          Object.defineProperty(file, "webkitRelativePath", {
+            value: fullPath,
+            configurable: true
+          });
+          resolve([file]);
+        }, () => resolve([]));
+      });
+    }
+    if (!entry.isDirectory) {
+      return [];
+    }
+    const childEntries = await readAllDirectoryEntries(entry.createReader());
+    const results: File[] = [];
+    for (const child of childEntries) {
+      const childPrefix = `${prefix}${entry.name}/`;
+      const childFiles = await walkDroppedEntry(child, childPrefix);
+      results.push(...childFiles);
+    }
+    return results;
+  }
+
+  async function readAllDirectoryEntries(reader: any): Promise<any[]> {
+    const entries: any[] = [];
+    while (true) {
+      const batch: any[] = await new Promise((resolve) => {
+        reader.readEntries((next: any[]) => resolve(next), () => resolve([]));
+      });
+      if (batch.length === 0) break;
+      entries.push(...batch);
+    }
+    return entries;
+  }
+
+  function handleDragEnter(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setDragActive(true);
+  }
+
+  function handleDragOver(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    if (!dragActive) setDragActive(true);
+  }
+
+  function handleDragLeave(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    dragDepthRef.current = Math.max(dragDepthRef.current - 1, 0);
+    if (dragDepthRef.current === 0) setDragActive(false);
+  }
+
+  async function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setDragActive(false);
+    if (!currentFolder || !bearerHeaders || loading) return;
+    await addDraggedFiles(event.dataTransfer);
   }
 
   async function downloadFile(item: DriveItem) {
@@ -2093,7 +2211,13 @@ export default function Home() {
                 </div>
               </div>
             ) : (
-              <>
+              <div
+                className={`rounded-lg border-2 border-dashed ${dragActive ? "border-blue-500 bg-blue-50/70" : "border-transparent"}`}
+                onDragEnter={handleDragEnter}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+              >
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-2">
                 <button
@@ -2162,16 +2286,6 @@ export default function Home() {
                   Add Folder
                 </button>
                 <button
-                  onClick={uploadPendingFiles}
-                  disabled={!currentFolder || loading || uploading || pendingUploads.length === 0}
-                  className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-600 px-4 font-semibold text-white disabled:opacity-50"
-                >
-                  <Upload className="h-4 w-4" />
-                  {uploading
-                    ? uploadProgressLabel || `Uploading (${pendingUploads.length})`
-                    : `Upload (${pendingUploads.length})`}
-                </button>
-                <button
                   onClick={createFolder}
                   disabled={!currentFolder || loading || uploading}
                   className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-600 px-4 font-semibold text-white disabled:opacity-50"
@@ -2190,14 +2304,6 @@ export default function Home() {
                   <p className="text-sm font-semibold text-slate-700">
                     {pendingUploads.length} file{pendingUploads.length === 1 ? "" : "s"} queued
                   </p>
-                  <button
-                    type="button"
-                    onClick={clearPendingUploads}
-                    disabled={uploading}
-                    className="inline-flex h-8 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium disabled:opacity-50"
-                  >
-                    Clear
-                  </button>
                 </div>
                 {uploadProgressLabel ? (
                   <p className="mb-2 text-xs font-medium text-slate-500">{uploadProgressLabel}</p>
@@ -2220,6 +2326,12 @@ export default function Home() {
                     ))}
                   </ul>
                 </div>
+              </div>
+            ) : null}
+
+            {dragActive ? (
+              <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm font-medium text-blue-700">
+                Drop files or folders here to upload them.
               </div>
             ) : null}
 
@@ -2407,7 +2519,7 @@ export default function Home() {
                 ))
               )}
             </div>
-              </>
+              </div>
             )}
           </section>
           <a

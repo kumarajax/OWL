@@ -15,6 +15,7 @@ Example:
 This updates:
   - docker-compose.yml
   - frontend/Dockerfile
+  - frontend/.env.local
 
 Optional:
   KEYCLOAK_ADMIN_PASSWORD='your-password' ./scripts/configure-cloudflare-public-urls.sh FRONTEND_URL BACKEND_URL KEYCLOAK_URL
@@ -22,7 +23,7 @@ Optional:
   When KEYCLOAK_ADMIN_PASSWORD is set, the script also updates the Keycloak
   owl-drive-web client redirect URIs, web origins, and logout redirect URIs.
 
-It does not restart Docker. After it succeeds, rebuild the frontend image:
+After it succeeds, it rebuilds the frontend image and restarts backend/frontend:
   docker compose build --no-cache frontend
   docker compose up -d backend frontend
 USAGE
@@ -41,6 +42,7 @@ fi
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 DOCKERFILE="$ROOT_DIR/frontend/Dockerfile"
+FRONTEND_ENV_FILE="$ROOT_DIR/frontend/.env.local"
 
 normalize_url() {
   local value="$1"
@@ -58,7 +60,7 @@ FRONTEND_URL="$(normalize_url "$1")"
 BACKEND_URL="$(normalize_url "$2")"
 KEYCLOAK_URL="$(normalize_url "$3")"
 
-python3 - "$COMPOSE_FILE" "$DOCKERFILE" "$FRONTEND_URL" "$BACKEND_URL" "$KEYCLOAK_URL" <<'PY'
+python3 - "$COMPOSE_FILE" "$DOCKERFILE" "$FRONTEND_ENV_FILE" "$FRONTEND_URL" "$BACKEND_URL" "$KEYCLOAK_URL" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -66,9 +68,10 @@ from urllib.parse import urlparse
 
 compose_path = Path(sys.argv[1])
 dockerfile_path = Path(sys.argv[2])
-frontend_url = sys.argv[3]
-backend_url = sys.argv[4]
-keycloak_url = sys.argv[5]
+frontend_env_path = Path(sys.argv[3])
+frontend_url = sys.argv[4]
+backend_url = sys.argv[5]
+keycloak_url = sys.argv[6]
 
 for label, value in [
     ("frontend", frontend_url),
@@ -81,6 +84,7 @@ for label, value in [
 
 compose = compose_path.read_text(encoding="utf-8")
 dockerfile = dockerfile_path.read_text(encoding="utf-8")
+frontend_env = frontend_env_path.read_text(encoding="utf-8") if frontend_env_path.exists() else ""
 
 issuer_value = (
     f"{keycloak_url.replace('https://', 'http://')}/realms/owldrive,"
@@ -93,6 +97,16 @@ def replace_key(text: str, key: str, value: str) -> tuple[str, bool]:
     replacement = rf"\g<1>{value}"
     text, count = pattern.subn(replacement, text)
     return text, count > 0
+
+def replace_env_key(text: str, key: str, value: str) -> str:
+    pattern = re.compile(rf"^{re.escape(key)}=.*$", re.MULTILINE)
+    replacement = f"{key}={value}"
+    text, count = pattern.subn(replacement, text)
+    if count:
+        return text
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return text + replacement + "\n"
 
 compose, found_cors = replace_key(compose, "APP_CORS_ALLOWED_ORIGINS", frontend_url)
 compose, found_issuers = replace_key(compose, "APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUERS", issuer_value)
@@ -190,8 +204,12 @@ else:
         if line not in dockerfile:
             dockerfile = dockerfile.replace("RUN npm run build\n", line + "\nRUN npm run build\n")
 
+frontend_env = replace_env_key(frontend_env, "NEXT_PUBLIC_API_BASE_URL", backend_url)
+frontend_env = replace_env_key(frontend_env, "NEXT_PUBLIC_KEYCLOAK_URL", keycloak_url)
+
 compose_path.write_text(compose, encoding="utf-8")
 dockerfile_path.write_text(dockerfile, encoding="utf-8")
+frontend_env_path.write_text(frontend_env, encoding="utf-8")
 PY
 
 cd "$ROOT_DIR"
@@ -232,6 +250,12 @@ else
   KEYCLOAK_STATUS="Skipped Keycloak client update. Set KEYCLOAK_ADMIN_PASSWORD to update it automatically."
 fi
 
+echo "Rebuilding frontend with Cloudflare public URLs..."
+docker compose build --no-cache frontend
+
+echo "Starting backend and frontend..."
+docker compose up -d backend frontend
+
 cat <<EOF
 Updated Cloudflare public URLs:
   Frontend: $FRONTEND_URL
@@ -241,9 +265,9 @@ Updated Cloudflare public URLs:
 Keycloak:
   $KEYCLOAK_STATUS
 
-Next steps:
-  docker compose build --no-cache frontend
-  docker compose up -d backend frontend
+Docker:
+  Rebuilt frontend image and restarted backend/frontend.
 
-Then hard refresh the public frontend page.
+Open or hard refresh:
+  $FRONTEND_URL
 EOF
