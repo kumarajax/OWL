@@ -1,20 +1,21 @@
 package com.owldrive.api;
 
+import java.util.concurrent.locks.ReentrantLock;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.http.HttpStatus;
 
 @Service
 public class UserCapacityService {
-    private final JdbcTemplate jdbc;
+    private final ShardJdbcRegistry shardJdbcRegistry;
     private final long maxUsers;
+    private final ReentrantLock registrationLock = new ReentrantLock();
 
     public UserCapacityService(
-            JdbcTemplate jdbc,
+            ShardJdbcRegistry shardJdbcRegistry,
             @Value("${app.users.max-users:1000}") long maxUsers) {
-        this.jdbc = jdbc;
+        this.shardJdbcRegistry = shardJdbcRegistry;
         this.maxUsers = maxUsers;
     }
 
@@ -24,20 +25,17 @@ public class UserCapacityService {
     }
 
     public void requireAvailableSlot() {
-        jdbc.execute("SELECT pg_advisory_xact_lock(hashtext('owl_drive_user_capacity'))");
-        if (activeUserCount() >= maxUsers) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Max usage reached");
+        registrationLock.lock();
+        try {
+            if (activeUserCount() >= maxUsers) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Max usage reached");
+            }
+        } finally {
+            registrationLock.unlock();
         }
     }
 
     private long activeUserCount() {
-        Long count = jdbc.queryForObject(
-                """
-                SELECT count(*)
-                FROM users
-                WHERE deactivated_at IS NULL
-                """,
-                Long.class);
-        return count == null ? 0 : count;
+        return shardJdbcRegistry.countActiveUsers();
     }
 }

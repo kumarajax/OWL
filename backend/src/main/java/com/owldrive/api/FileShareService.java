@@ -23,16 +23,19 @@ public class FileShareService {
     private static final SecureRandom secureRandom = new SecureRandom();
 
     private final JdbcTemplate jdbc;
+    private final ShardJdbcRegistry shardJdbcRegistry;
     private final ProvisioningService provisioningService;
     private final FolderService folderService;
     private final ObjectStorageService objectStorageService;
 
     public FileShareService(
             JdbcTemplate jdbc,
+            ShardJdbcRegistry shardJdbcRegistry,
             ProvisioningService provisioningService,
             FolderService folderService,
             ObjectStorageService objectStorageService) {
         this.jdbc = jdbc;
+        this.shardJdbcRegistry = shardJdbcRegistry;
         this.provisioningService = provisioningService;
         this.folderService = folderService;
         this.objectStorageService = objectStorageService;
@@ -102,22 +105,11 @@ public class FileShareService {
         if (token == null || token.isBlank()) {
             throw notFound("Share not found");
         }
-        FileRecord file = jdbc.query(
-                """
-                SELECT f.id, f.owner_id, f.parent_folder_id, f.original_name, f.storage_key, f.content_type,
-                       f.size_bytes, f.checksum_sha256, f.created_at, f.updated_at, f.deleted_at
-                FROM file_shares s
-                JOIN files f ON f.id = s.file_id
-                JOIN users u ON u.id = s.owner_id
-                WHERE s.token_hash = ?
-                  AND s.revoked_at IS NULL
-                  AND (s.expires_at IS NULL OR s.expires_at > now())
-                  AND f.deleted_at IS NULL
-                  AND u.deactivated_at IS NULL
-                """,
-                this::mapFile,
-                sha256Hex(token)).stream().findFirst().orElseThrow(() -> notFound("Share not found"));
-        jdbc.update(
+        LocatedFileRecord located = shardJdbcRegistry.findFileByShareToken(sha256Hex(token))
+                .orElseThrow(() -> notFound("Share not found"));
+        ShardContext.setCurrentShard(located.shardId());
+        FileRecord file = located.file();
+        shardJdbcRegistry.jdbc(located.shardId()).update(
                 """
                 UPDATE file_shares
                 SET download_count = download_count + 1,
@@ -127,7 +119,7 @@ public class FileShareService {
                 sha256Hex(token));
 
         try {
-            StorageDownload download = objectStorageService.download(file.storageKey());
+            StorageDownload download = objectStorageService.download(file.storagePool(), file.storageKey());
             return new DownloadableFile(file, download.resource(), download.sizeBytes());
         } catch (java.nio.file.NoSuchFileException ex) {
             throw notFound("File bytes not found");
@@ -139,7 +131,7 @@ public class FileShareService {
     private FileRecord requireOwnedActiveFile(UserRecord user, UUID fileId) {
         FileRecord file = jdbc.query(
                 """
-                SELECT id, owner_id, parent_folder_id, original_name, storage_key, content_type,
+                SELECT id, owner_id, parent_folder_id, original_name, storage_pool, storage_key, content_type,
                        size_bytes, checksum_sha256, created_at, updated_at, deleted_at
                 FROM files
                 WHERE id = ?
@@ -176,6 +168,7 @@ public class FileShareService {
                 rs.getObject("owner_id", UUID.class),
                 rs.getObject("parent_folder_id", UUID.class),
                 rs.getString("original_name"),
+                rs.getString("storage_pool"),
                 rs.getString("storage_key"),
                 rs.getString("content_type"),
                 rs.getLong("size_bytes"),

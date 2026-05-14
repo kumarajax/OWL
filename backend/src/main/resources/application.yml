@@ -11,7 +11,7 @@ spring:
     username: owldrive
     password: owldrive_dev_password
   flyway:
-    enabled: true
+    enabled: false
     schemas: app
     create-schemas: true
 

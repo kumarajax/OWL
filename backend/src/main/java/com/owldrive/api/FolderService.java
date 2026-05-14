@@ -56,7 +56,7 @@ public class FolderService {
 
         jdbc.query(
                 """
-                SELECT id, owner_id, parent_folder_id, original_name, storage_key, content_type,
+                SELECT id, owner_id, parent_folder_id, original_name, storage_pool, storage_key, content_type,
                        size_bytes, checksum_sha256, created_at, updated_at, deleted_at
                 FROM files
                 WHERE owner_id = ? AND parent_folder_id = ? AND deleted_at IS NULL
@@ -184,13 +184,13 @@ public class FolderService {
                   JOIN subtree parent ON child.parent_id = parent.id
                   WHERE child.owner_id = ? AND child.deleted_at IS NULL
                 )
-                SELECT storage_key, size_bytes
+                SELECT storage_pool, storage_key, size_bytes
                 FROM files
                 WHERE owner_id = ?
                   AND parent_folder_id IN (SELECT id FROM subtree)
                   AND deleted_at IS NULL
                 """,
-                (rs, rowNum) -> new DeletedFileBytes(rs.getString("storage_key"), rs.getLong("size_bytes")),
+                (rs, rowNum) -> new DeletedFileBytes(rs.getString("storage_pool"), rs.getString("storage_key"), rs.getLong("size_bytes")),
                 folder.id(),
                 user.id(),
                 user.id(),
@@ -249,23 +249,23 @@ public class FolderService {
                     releasedBytes,
                     user.id());
         }
-        deleteStoredBytesAfterCommit(deletedFileBytes.stream().map(DeletedFileBytes::storageKey).toList());
+        deleteStoredBytesAfterCommit(deletedFileBytes);
     }
 
-    private record DeletedFileBytes(String storageKey, long sizeBytes) {}
+    private record DeletedFileBytes(String storagePool, String storageKey, long sizeBytes) {}
 
-    private void deleteStoredBytesAfterCommit(List<String> storageKeys) {
-        if (storageKeys.isEmpty()) {
+    private void deleteStoredBytesAfterCommit(List<DeletedFileBytes> deletedFileBytes) {
+        if (deletedFileBytes.isEmpty()) {
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                for (String storageKey : storageKeys) {
+                for (DeletedFileBytes deletedFileByte : deletedFileBytes) {
                     try {
-                        objectStorageService.deleteStorageKey(storageKey);
+                        objectStorageService.deleteStorageKey(deletedFileByte.storagePool(), deletedFileByte.storageKey());
                     } catch (IOException ex) {
-                        log.warn("Unable to delete stored bytes at {}", storageKey, ex);
+                        log.warn("Unable to delete stored bytes at {} in pool {}", deletedFileByte.storageKey(), deletedFileByte.storagePool(), ex);
                     }
                 }
             }
@@ -430,6 +430,7 @@ public class FolderService {
                 rs.getObject("owner_id", UUID.class),
                 rs.getObject("parent_folder_id", UUID.class),
                 rs.getString("original_name"),
+                rs.getString("storage_pool"),
                 rs.getString("storage_key"),
                 rs.getString("content_type"),
                 rs.getLong("size_bytes"),

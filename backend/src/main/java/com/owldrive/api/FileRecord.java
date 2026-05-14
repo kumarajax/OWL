@@ -8,6 +8,7 @@ public record FileRecord(
         UUID ownerId,
         UUID parentFolderId,
         String originalName,
+        String storagePool,
         String storageKey,
         String contentType,
         long sizeBytes,

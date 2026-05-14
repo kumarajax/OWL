@@ -82,7 +82,7 @@ public class FileService {
         UserRecord user = provisioningService.ensureUser(jwt);
         FileRecord file = requireOwnedActiveFile(user, fileId);
         try {
-            StorageDownload download = objectStorageService.download(file.storageKey());
+            StorageDownload download = objectStorageService.download(file.storagePool(), file.storageKey());
             return new DownloadableFile(file, download.resource(), download.sizeBytes());
         } catch (java.nio.file.NoSuchFileException ex) {
             throw notFound("File bytes not found");
@@ -114,7 +114,7 @@ public class FileService {
                     UPDATE files
                     SET parent_folder_id = ?, updated_at = now()
                     WHERE id = ? AND owner_id = ? AND deleted_at IS NULL
-                    RETURNING id, owner_id, parent_folder_id, original_name, storage_key,
+                    RETURNING id, owner_id, parent_folder_id, original_name, storage_pool, storage_key,
                               content_type, size_bytes, checksum_sha256,
                               created_at, updated_at, deleted_at
                     """,
@@ -175,14 +175,15 @@ public class FileService {
             FileRecord updated = jdbc.queryForObject(
                     """
                     UPDATE files
-                    SET storage_key = ?, content_type = ?, size_bytes = ?, checksum_sha256 = ?,
+                    SET storage_pool = ?, storage_key = ?, content_type = ?, size_bytes = ?, checksum_sha256 = ?,
                         original_name = ?, updated_at = now()
                     WHERE id = ? AND owner_id = ? AND deleted_at IS NULL
-                    RETURNING id, owner_id, parent_folder_id, original_name, storage_key,
+                    RETURNING id, owner_id, parent_folder_id, original_name, storage_pool, storage_key,
                               content_type, size_bytes, checksum_sha256,
                               created_at, updated_at, deleted_at
                     """,
                     this::mapFile,
+                    storedFile.storagePool(),
                     storedFile.storageKey(),
                     contentType(upload),
                     storedFile.sizeBytes(),
@@ -206,11 +207,11 @@ public class FileService {
             return jdbc.queryForObject(
                     """
                     INSERT INTO files (
-                      id, owner_id, parent_folder_id, original_name, storage_key,
+                      id, owner_id, parent_folder_id, original_name, storage_pool, storage_key,
                       content_type, size_bytes, checksum_sha256
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    RETURNING id, owner_id, parent_folder_id, original_name, storage_key,
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    RETURNING id, owner_id, parent_folder_id, original_name, storage_pool, storage_key,
                               content_type, size_bytes, checksum_sha256,
                               created_at, updated_at, deleted_at
                     """,
@@ -219,6 +220,7 @@ public class FileService {
                     user.id(),
                     parentFolderId,
                     originalName,
+                    storedFile.storagePool(),
                     storedFile.storageKey(),
                     contentType(upload),
                     storedFile.sizeBytes(),
@@ -282,9 +284,9 @@ public class FileService {
             @Override
             public void afterCommit() {
                 try {
-                    objectStorageService.deleteStorageKey(file.storageKey());
+                    objectStorageService.deleteStorageKey(file.storagePool(), file.storageKey());
                 } catch (IOException ex) {
-                    log.warn("Unable to delete stored bytes for file {} at {}", file.id(), file.storageKey(), ex);
+                    log.warn("Unable to delete stored bytes for file {} at {} in pool {}", file.id(), file.storageKey(), file.storagePool(), ex);
                 }
             }
         });
@@ -292,16 +294,16 @@ public class FileService {
 
     private void deleteStoredBytesQuietly(StoredFile storedFile) {
         try {
-            objectStorageService.deleteStorageKey(storedFile.storageKey());
+            objectStorageService.deleteStorageKey(storedFile.storagePool(), storedFile.storageKey());
         } catch (IOException ex) {
-            log.warn("Unable to delete stored bytes after failed upload at {}", storedFile.storageKey(), ex);
+            log.warn("Unable to delete stored bytes after failed upload at {} in pool {}", storedFile.storageKey(), storedFile.storagePool(), ex);
         }
     }
 
     private FileRecord findActiveFileByName(UUID ownerId, UUID parentFolderId, String originalName) {
         return jdbc.query(
                 """
-                SELECT id, owner_id, parent_folder_id, original_name, storage_key, content_type,
+                SELECT id, owner_id, parent_folder_id, original_name, storage_pool, storage_key, content_type,
                        size_bytes, checksum_sha256, created_at, updated_at, deleted_at
                 FROM files
                 WHERE owner_id = ?
@@ -324,7 +326,7 @@ public class FileService {
     private FileRecord requireOwnedActiveFile(UserRecord user, UUID fileId) {
         FileRecord file = jdbc.query(
                 """
-                SELECT id, owner_id, parent_folder_id, original_name, storage_key, content_type,
+                SELECT id, owner_id, parent_folder_id, original_name, storage_pool, storage_key, content_type,
                        size_bytes, checksum_sha256, created_at, updated_at, deleted_at
                 FROM files
                 WHERE id = ?
@@ -423,6 +425,7 @@ public class FileService {
                 rs.getObject("owner_id", UUID.class),
                 rs.getObject("parent_folder_id", UUID.class),
                 rs.getString("original_name"),
+                rs.getString("storage_pool"),
                 rs.getString("storage_key"),
                 rs.getString("content_type"),
                 rs.getLong("size_bytes"),

@@ -7,7 +7,7 @@ This phase implements only:
 - Current user and `My Drive` root provisioning.
 - User role and storage quota model.
 - Authenticated folder CRUD inside `My Drive`.
-- Basic local-disk file upload, download, listing, and soft delete.
+- MinIO-backed file upload, download, listing, and soft delete.
 
 Not included:
 
@@ -68,15 +68,15 @@ For local external-drive storage, create local config files from the committed e
 
 ```bash
 cp .env.example .env
-cp docker-compose.override.example.yml docker-compose.override.yml
+./scripts/sync-storage-config.sh
 set -a
 . ./.env
 set +a
-mkdir -p "$DATA_STORAGE_ROOT/minio" "$DATA_STORAGE_ROOT/postgres"
+mkdir -p "$DATA_STORAGE_ROOT/minio" "$DATA_STORAGE_ROOT/minio-2" "$DATA_STORAGE_ROOT/postgres" "$DATA_STORAGE_ROOT/postgres-shard-2"
 docker compose up --build
 ```
 
-Edit `DATA_STORAGE_ROOT` in `.env` for your machine. Docker Compose reads `.env` and `docker-compose.override.yml` automatically; both local files are ignored by git.
+Edit `DATA_STORAGE_ROOT`, `DATA_STORAGE_ROOT_2`, and any later `DATA_STORAGE_ROOT_N` entries in `.env` for your machine. Run `./scripts/sync-storage-config.sh` after changing them so `docker-compose.yml` and the override files stay aligned. Docker Compose reads `.env` and `docker-compose.override.yml` automatically; the generated local files are ignored by git.
 
 Stop everything:
 
@@ -123,12 +123,17 @@ When an access token expires, the frontend clears the local session and returns 
 
 ## Object Storage
 
-OWL Drive stores file bytes in MinIO and keeps file metadata in Postgres.
+OWL Drive stores file bytes in MinIO pools and keeps file metadata in Postgres shards.
 
-By default, Compose stores MinIO data in a Docker named volume:
+New user accounts are assigned to the least-loaded Postgres shard. New file uploads try MinIO pools in order and fall through to the next pool if a pool rejects the write. Existing users and files stay on the shard or pool where they were created.
+
+By default, Compose stores MinIO and Postgres data in Docker named volumes:
 
 ```text
 minio-data
+minio-2-data
+postgres-data
+postgres-shard-2-data
 ```
 
 For a Compose-based external-drive setup, copy the root examples:
@@ -148,7 +153,9 @@ The override derives durable paths from it:
 
 ```text
 ${DATA_STORAGE_ROOT}/minio
+${DATA_STORAGE_ROOT}/minio-2
 ${DATA_STORAGE_ROOT}/postgres
+${DATA_STORAGE_ROOT}/postgres-shard-2
 ```
 
 The upload limits can be overridden with:
@@ -386,7 +393,7 @@ Deleted files remain in `app.files` with `deleted_at` populated and do not appea
 - Migration: `backend/src/main/resources/db/migration/V3__phase3_files.sql`
 - File API: `backend/src/main/java/com/owldrive/api/FileController.java`
 - File logic: `backend/src/main/java/com/owldrive/api/FileService.java`
-- Object storage: `backend/src/main/java/com/owldrive/api/MinioObjectStorageService.java`
+- Object storage: `backend/src/main/java/com/owldrive/api/MultiPoolMinioObjectStorageService.java`
 - File records: `backend/src/main/java/com/owldrive/api/FileRecord.java`, `backend/src/main/java/com/owldrive/api/DriveItemRecord.java`, `backend/src/main/java/com/owldrive/api/DownloadableFile.java`, `backend/src/main/java/com/owldrive/api/StoredFile.java`
 - Folder listing update: `backend/src/main/java/com/owldrive/api/FolderService.java`, `backend/src/main/java/com/owldrive/api/FolderController.java`
 - Storage config: `backend/src/main/resources/application.yml`
