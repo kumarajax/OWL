@@ -167,6 +167,13 @@ Object keys use generated IDs only:
 
 User-provided filenames are stored only as metadata and download display names.
 
+Backups and restores:
+
+```bash
+./scripts/backup-restore.sh backup all
+./scripts/backup-restore.sh restore all backups/backup-YYYYMMDD-HHMMSS
+```
+
 ## User Capacity
 
 OWL Drive defaults to 1000 active users. Change the limit with:
