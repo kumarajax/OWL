@@ -191,7 +191,220 @@
 ---------------------
 
 
+To restore postgress:
+---------------------
+ Postgres Backup
+ ---------------
+ ---------------
+
+  Run from the repo root:
+
+  cd /Users/ajay/DATA/CODE/OWL
+
+  If the stack is not already up, start only Postgres first:
+
+  docker compose up -d postgres
+
+  Create a backup directory and dump the database in custom format:
+
+  mkdir -p backups
+  BACKUP_DIR="$PWD/backups/backup-$(date +%Y%m%d-%H%M%S)"
+
+  docker compose exec postgres pg_dump \
+    -U owldrive \
+    -d owldrive \
+    -Fc \
+    -f /tmp/owldrive.dump
+
+  docker cp "$(docker compose ps -q postgres):/tmp/owldrive.dump" "$BACKUP_DIR/owldrive.dump"
+
+  Verify the dump exists:
+
+  ls -lh "$BACKUP_DIR/owldrive.dump"
+
+  This backup contains both:
+
+  - OWL app data in app schema
+  - Keycloak data in keycloak schema
 
 
- TOKEN='eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJfNWt4U1JnN2xDRXMtTnRUZmg4T1hYWUpXc21aQ1RPMnRpN0pGVTE0NFlVIn0.eyJleHAiOjE3NzcyNzc3MzEsImlhdCI6MTc3NzI3NzQzMSwiYXV0aF90aW1lIjoxNzc3Mjc3NDMwLCJqdGkiOiI1YjA3ZTljZi01NTAwLTRkMDgtOTdiOS01NzdiZTA3OWU2MmEiLCJpc3MiOiJodHRwOi8vbG9jYWxob3N0OjgwODAvcmVhbG1zL293bGRyaXZlIiwic3ViIjoiYmE4ZTFkMTUtOGE3Zi00OWViLWI4MjEtY2VjOGFlZWU2YzM1IiwidHlwIjoiQmVhcmVyIiwiYXpwIjoib3dsLWRyaXZlLXdlYiIsInNpZCI6ImU2OTI4YTRlLTIzMzItNDBiMS05YTdjLTA1ZWQxNGFmMzAyZiIsImFjciI6IjEiLCJhbGxvd2VkLW9yaWdpbnMiOlsiaHR0cDovL2xvY2FsaG9zdDozMDAwIl0sInNjb3BlIjoib3BlbmlkIGVtYWlsIHByb2ZpbGUiLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwibmFtZSI6IlRlc3QgVXNlciIsInByZWZlcnJlZF91c2VybmFtZSI6InRlc3R1c2VyIiwiZ2l2ZW5fbmFtZSI6IlRlc3QiLCJmYW1pbHlfbmFtZSI6IlVzZXIiLCJlbWFpbCI6InRlc3R1c2VyQGV4YW1wbGUuY29tIn0.QB7EcIcTFuPpG_QwJbqf1mRcdxV_ZFxIe0xs_TzpuaBm7743SCpmbOUnxy2n1PiHGGNrWv3EJ50LIjLfER40TSBwgCO7bMBSsOL74ix4QabJyLn2jQQFj6U1zSsrBZrSDW5s1Mg9F87i33GVamBgTuUe_qjqqwu4Y4ZyyCx_X5iefQpVVJIlHPJpkNWgaCHcVXpf4GqqPhmISny8Umho9hLlOo4_8HulLVPalGkwfBa6TzPVh9fjF-BiGs5CNpvTR5t57hqKbrMeKMg2zDLdF98mLWB7UjPaoyQPiWUYBj0exzl-J-gFCU8kTa3SuYZuR6qk3crmroC-UsRVYe3WuQ'
-  curl -H "Authorization: Bearer $TOKEN" http://localhost:8081/api/me
+
+
+  Postgres Restore
+  -----------------
+  -----------------
+
+  If you want a clean restore, stop the stack first:
+
+  cd /Users/ajay/DATA/CODE/OWL
+  docker compose down --remove-orphans
+
+  Start Postgres:
+
+  docker compose up -d postgres
+
+  Set the backup path:
+
+  BACKUP_DIR="/Users/ajay/DATA/CODE/OWL/backups/backup-20260513-220523"
+
+  Copy the dump into the Postgres container:
+
+  docker cp "$BACKUP_DIR/owldrive.dump" "$(docker compose ps -q postgres):/tmp/owldrive.dump"
+
+  Restore it:
+
+  docker compose exec postgres pg_restore \
+    -U owldrive \
+    -d owldrive \
+    --clean \
+    --if-exists \
+    /tmp/owldrive.dump
+
+  Then start the rest of the stack:
+
+  docker compose up -d --build
+
+  Quick checks
+
+  docker compose ps
+  docker compose exec postgres psql -U owldrive -d owldrive -c '\dt app.*'
+  docker compose exec postgres psql -U owldrive -d owldrive -c '\dt keycloak.*'
+
+
+
+  MinIO Backup
+  --------------
+  -------------
+
+  Since MinIO is mounted to the host in your current setup, the simplest backup is just the host directory copy.
+
+  Run from the repo root:
+
+  cd /Users/ajay/DATA/CODE/OWL
+
+  Stop the stack first so MinIO is quiet:
+
+  docker compose down --remove-orphans
+
+  Create a backup folder and archive the MinIO data directory:
+
+  mkdir -p backups
+  BACKUP_DIR="$PWD/backups/backup-$(date +%Y%m%d-%H%M%S)"
+
+  tar -czf "$BACKUP_DIR/minio.tgz" -C /Volumes/PEN/OWL_DRIVE minio
+
+  Verify it:
+
+  ls -lh "$BACKUP_DIR/minio.tgz"
+
+  This contains the MinIO bucket/object data stored under:
+
+  /Volumes/PEN/OWL_DRIVE/minio
+
+  MinIO Restore
+
+  Stop the stack if it is running:
+
+  cd /Users/ajay/DATA/CODE/OWL
+  docker compose down --remove-orphans
+
+  Clear the current MinIO data directory:
+
+  rm -rf /Volumes/PEN/OWL_DRIVE/minio
+  mkdir -p /Volumes/PEN/OWL_DRIVE/minio
+
+  Restore from the tarball:
+
+  BACKUP_DIR="/Users/ajay/DATA/CODE/OWL/backups/backup-20260513-220523"
+
+  tar -xzf "$BACKUP_DIR/minio.tgz" -C /Volumes/PEN/OWL_DRIVE
+
+  Start the stack again:
+
+  docker compose up -d --build --remove-orphans
+
+  Quick check:
+
+  docker compose ps
+  find /Volumes/PEN/OWL_DRIVE/minio -maxdepth 5 -type f | head
+
+
+
+==================================================================================================================================================================
+
+==================================================================================================================================================================
+
+On UBUNTU
+----------
+
+• Use this sequence on Ubuntu.
+
+  1. Update the repo to the latest remote commit:
+
+  cd /path/to/OWL
+  git fetch origin --prune
+  git switch main
+  git pull --ff-only origin main
+  git switch dev
+  git pull --ff-only origin dev
+  git switch main
+
+  2. Confirm the backup script is present:
+
+  ls -l scripts/backup-restore.sh
+
+  3. Create your local compose config from the committed templates if you do not already have them:
+
+  cp -n .env.example .env
+  cp -n docker-compose.override.example.yml docker-compose.override.yml
+
+  4. Set your local storage root in .env.
+
+  For example:
+
+  DATA_STORAGE_ROOT=/mnt/owl_drive
+
+  5. Create the host directories the stack will bind to:
+
+  mkdir -p /mnt/owl_drive/postgres
+  mkdir -p /mnt/owl_drive/minio
+  mkdir -p backups
+
+  6. Start the stack:
+
+  docker compose up -d --build --remove-orphans
+
+  7. Verify it is up:
+
+  docker compose ps
+  curl -I http://localhost:3000
+  curl -I http://localhost:8081/health
+  curl -I http://localhost:8080/realms/owldrive
+  curl -I http://localhost:9001
+
+  8. Take a backup when you need one:
+
+  ./scripts/backup-restore.sh backup all
+
+  That writes a timestamped folder under:
+
+  backups/backup-YYYYMMDD-HHMMSS
+
+  9. Restore from a backup:
+
+  docker compose down --remove-orphans
+  ./scripts/backup-restore.sh restore all backups/backup-YYYYMMDD-HHMMSS
+  docker compose up -d --build --remove-orphans
+
+  10. If you only want one part:
+
+  - Postgres only:
+
+    ./scripts/backup-restore.sh backup postgres
+    ./scripts/backup-restore.sh restore postgres backups/backup-YYYYMMDD-HHMMSS
+  - MinIO only:
+
+    ./scripts/backup-restore.sh backup minio
+    ./scripts/backup-restore.sh restore minio backups/backup-YYYYMMDD-HHMMSS
+
+  If you want, I can also give you the same sequence as a copy-paste Ubuntu runbook with your actual mount path filled in.
