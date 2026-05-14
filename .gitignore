@@ -20,11 +20,12 @@ __pycache__/
 # Environment / secrets (VERY IMPORTANT)
 .env
 .env.local
+docker-compose.override.yml
 
 # Data / storage (VERY IMPORTANT)
 data/
 storage/
-docker-compose.override.yml
+backups/
 
 # IDE
 .vscode/

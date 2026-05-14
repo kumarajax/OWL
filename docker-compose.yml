@@ -41,6 +41,18 @@ services:
       keycloak-db-init:
         condition: service_completed_successfully
 
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
   backend:
     build:
       context: ./backend
@@ -49,17 +61,18 @@ services:
       SPRING_DATASOURCE_USERNAME: owldrive
       SPRING_DATASOURCE_PASSWORD: owldrive_dev_password
       KEYCLOAK_INTERNAL_URL: http://keycloak:8080
-      APP_STORAGE_LOCAL_CONFIG_FILE: /app/config/storage-roots.conf
-      APP_STORAGE_LOCAL_FALLBACK_ROOT: /app/data/storage
+      APP_STORAGE_MINIO_ENDPOINT: http://minio:9000
+      APP_STORAGE_MINIO_ACCESS_KEY: minioadmin
+      APP_STORAGE_MINIO_SECRET_KEY: minioadmin
+      APP_STORAGE_MINIO_BUCKET: owl-drive
       APP_CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUERS: http://localhost:8080/realms/owldrive,http://127.0.0.1:8080/realms/owldrive
     ports:
       - "8081:8081"
-    volumes:
-      - ./infra/storage-roots.conf:/app/config/storage-roots.conf:ro
-      - ./backend/data/storage:/app/data/storage
     depends_on:
       - postgres
       - keycloak
+      - minio
 
   frontend:
     build:
@@ -78,3 +91,4 @@ services:
 
 volumes:
   postgres-data:
+  minio-data:

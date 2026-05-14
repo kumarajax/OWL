@@ -53,8 +53,7 @@ From a fresh clone:
 ```bash
 git clone https://github.com/kumarajax/OWL.git
 cd OWL
-./scripts/dev-up.sh
-./scripts/start-app.sh
+docker compose up --build
 ```
 
 Open:
@@ -65,35 +64,25 @@ http://localhost:3000
 
 On the login screen, use `Create account` to register with an email and password. The email becomes the username.
 
-If you prefer separate terminals:
+For local external-drive storage, create local config files from the committed examples before starting:
+
+```bash
+cp .env.example .env
+cp docker-compose.override.example.yml docker-compose.override.yml
+set -a
+. ./.env
+set +a
+mkdir -p "$DATA_STORAGE_ROOT/minio" "$DATA_STORAGE_ROOT/postgres"
+docker compose up --build
+```
+
+Edit `DATA_STORAGE_ROOT` in `.env` for your machine. Docker Compose reads `.env` and `docker-compose.override.yml` automatically; both local files are ignored by git.
+
+Stop everything:
 
 ```bash
 cd OWL
-./scripts/dev-up.sh
-```
-
-```bash
-cd OWL/backend
-mvn spring-boot:run
-```
-
-```bash
-cd OWL/frontend
-npm run dev
-```
-
-Stop backend and frontend:
-
-```bash
-cd OWL
-./scripts/stop-app.sh
-```
-
-Stop Docker infrastructure:
-
-```bash
-cd OWL
-./scripts/dev-down.sh
+docker compose down --remove-orphans
 ```
 
 ## Storage
@@ -134,25 +123,33 @@ When an access token expires, the frontend clears the local session and returns 
 
 ## Object Storage
 
-OWL Drive stores file bytes on disk and keeps file metadata in Postgres.
+OWL Drive stores file bytes in MinIO and keeps file metadata in Postgres.
 
-The drive list lives in one file:
-
-```text
-infra/storage-roots.conf
-```
-
-Add one absolute host path per line. The backend reads that file, and the Docker helper script turns it into container mounts automatically.
-
-After changing the file, rerun `./scripts/sync-storage-roots.sh` or `./scripts/dev-up.sh` before restarting the stack.
-
-The backend also keeps a local fallback disk at:
+By default, Compose stores MinIO data in a Docker named volume:
 
 ```text
-./backend/data/storage
+minio-data
 ```
 
-The upload limits can be overridden with:
+For a Compose-based external-drive setup, copy the root examples:
+
+```bash
+cp .env.example .env
+cp docker-compose.override.example.yml docker-compose.override.yml
+```
+
+Then set one local value:
+
+```env
+DATA_STORAGE_ROOT=/Volumes/PEN/OWL_DRIVE
+```
+
+The override derives durable paths from it:
+
+```text
+${DATA_STORAGE_ROOT}/minio
+${DATA_STORAGE_ROOT}/postgres
+```
 
 The upload limits can be overridden with:
 
@@ -210,9 +207,11 @@ When active users reach this limit, the frontend disables account creation and t
 
 After cloning, these should all come up cleanly:
 
-- `postgres` and `keycloak` from `./scripts/dev-up.sh`
-- backend on `http://localhost:8081`
 - frontend on `http://localhost:3000`
+- backend on `http://localhost:8081`
+- Keycloak on `http://localhost:8080`
+- MinIO console on `http://localhost:9001`
+- PostgreSQL on `localhost:5432`
 
 If you open the app as `http://127.0.0.1:3000`, the current local config also allows that host.
 
@@ -220,9 +219,8 @@ On Windows, run the commands from Git Bash or WSL, and use Docker Desktop so `do
 
 ## Why The Fresh Clone Failed
 
-The initial clone/import failed because:
+Earlier local setup issues included:
 
-- `scripts/start-app.sh` used `setsid`, which is not portable on macOS.
 - `infra/keycloak/realm-export.json` previously seeded reusable test passwords. The seeded users now use temporary `Changeme` credentials for local setup.
 - Backend CORS and Keycloak redirect settings only allowed `http://localhost:3000`, not `http://127.0.0.1:3000`.
 - The Next dev server needed an explicit local allowed-origin entry when accessed through `127.0.0.1`.
@@ -381,7 +379,7 @@ Deleted files remain in `app.files` with `deleted_at` populated and do not appea
 - Migration: `backend/src/main/resources/db/migration/V3__phase3_files.sql`
 - File API: `backend/src/main/java/com/owldrive/api/FileController.java`
 - File logic: `backend/src/main/java/com/owldrive/api/FileService.java`
-- Object storage: `backend/src/main/java/com/owldrive/api/LocalStorageService.java`
+- Object storage: `backend/src/main/java/com/owldrive/api/MinioObjectStorageService.java`
 - File records: `backend/src/main/java/com/owldrive/api/FileRecord.java`, `backend/src/main/java/com/owldrive/api/DriveItemRecord.java`, `backend/src/main/java/com/owldrive/api/DownloadableFile.java`, `backend/src/main/java/com/owldrive/api/StoredFile.java`
 - Folder listing update: `backend/src/main/java/com/owldrive/api/FolderService.java`, `backend/src/main/java/com/owldrive/api/FolderController.java`
 - Storage config: `backend/src/main/resources/application.yml`

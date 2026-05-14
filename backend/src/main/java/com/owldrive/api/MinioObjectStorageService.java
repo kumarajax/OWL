@@ -22,11 +22,13 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Primary;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 @Service
+@Primary
 public class MinioObjectStorageService implements ObjectStorageService {
     private static final long UPLOAD_PART_SIZE = 10L * 1024 * 1024;
 

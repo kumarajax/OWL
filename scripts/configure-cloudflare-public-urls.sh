@@ -115,8 +115,8 @@ compose, found_keycloak_env = replace_key(compose, "NEXT_PUBLIC_KEYCLOAK_URL", k
 
 if not found_cors:
     compose = compose.replace(
-        "      APP_STORAGE_LOCAL_FALLBACK_ROOT: /app/data/storage\n",
-        "      APP_STORAGE_LOCAL_FALLBACK_ROOT: /app/data/storage\n"
+        "      APP_STORAGE_MINIO_BUCKET: owl-drive\n",
+        "      APP_STORAGE_MINIO_BUCKET: owl-drive\n"
         f"      APP_CORS_ALLOWED_ORIGINS: {frontend_url}\n",
     )
 
