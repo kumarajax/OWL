@@ -242,10 +242,10 @@ public class ProvisioningService {
         if (realmAccess instanceof Map<?, ?> map) {
             Object roles = map.get("roles");
             if (roles instanceof Collection<?> collection) {
-                if (collection.contains("ADMIN")) {
+                if (hasRole(collection, "admin")) {
                     return "ADMIN";
                 }
-                if (collection.contains("OPERATIONS")) {
+                if (hasRole(collection, "operations")) {
                     return "OPERATIONS";
                 }
             }
@@ -256,10 +256,10 @@ public class ProvisioningService {
                 if (value instanceof Map<?, ?> access) {
                     Object roles = access.get("roles");
                     if (roles instanceof Collection<?> collection) {
-                        if (collection.contains("ADMIN")) {
+                        if (hasRole(collection, "admin")) {
                             return "ADMIN";
                         }
-                        if (collection.contains("OPERATIONS")) {
+                        if (hasRole(collection, "operations")) {
                             return "OPERATIONS";
                         }
                     }
@@ -267,6 +267,12 @@ public class ProvisioningService {
             }
         }
         return "USER";
+    }
+
+    private boolean hasRole(Collection<?> roles, String expectedRole) {
+        return roles.stream()
+                .map(String::valueOf)
+                .anyMatch(role -> role.equalsIgnoreCase(expectedRole));
     }
 
     private String trimToNull(String value) {
