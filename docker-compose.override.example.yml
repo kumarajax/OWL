@@ -3,14 +3,6 @@ services:
     volumes:
       - "${DATA_STORAGE_ROOT}/postgres:/var/lib/postgresql/data"
 
-  postgres-shard-2:
-    volumes:
-      - "${DATA_STORAGE_ROOT_2}/postgres-shard-2:/var/lib/postgresql/data"
-
   minio:
     volumes:
       - "${DATA_STORAGE_ROOT}/minio:/data"
-
-  minio-2:
-    volumes:
-      - "${DATA_STORAGE_ROOT_2}/minio-2:/data"
