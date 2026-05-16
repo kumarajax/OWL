@@ -86,7 +86,11 @@ render_override_file() {
 services:
   postgres:
     volumes:
-      - "${DATA_STORAGE_ROOT}/postgres:/var/lib/postgresql/data"
+      - type: bind
+        source: "${DATA_STORAGE_ROOT}/postgres"
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
 EOF
 
     local index=2
@@ -97,7 +101,11 @@ EOF
 
   postgres-shard-$index:
     volumes:
-      - "\${$root_var}/postgres-shard-$index:/var/lib/postgresql/data"
+      - type: bind
+        source: "\${$root_var}/postgres-shard-$index"
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
 EOF
       index=$((index + 1))
     done
@@ -106,7 +114,11 @@ EOF
 
   minio:
     volumes:
-      - "${DATA_STORAGE_ROOT}/minio:/data"
+      - type: bind
+        source: "${DATA_STORAGE_ROOT}/minio"
+        target: /data
+        bind:
+          create_host_path: false
 EOF
 
     index=2
@@ -117,7 +129,11 @@ EOF
 
   minio-$index:
     volumes:
-      - "\${$root_var}/minio-$index:/data"
+      - type: bind
+        source: "\${$root_var}/minio-$index"
+        target: /data
+        bind:
+          create_host_path: false
 EOF
       index=$((index + 1))
     done
@@ -202,6 +218,10 @@ EOF
       KC_DB_USERNAME: \${POSTGRES_USER:-owldrive}
       KC_DB_PASSWORD: \${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       KC_FEATURES: persistent-user-sessions
+      KC_PROXY_HEADERS: xforwarded
+      KC_HOSTNAME: https://auth.owl-drive.com
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
     ports:
       - "8080:8080"
     depends_on:
@@ -277,8 +297,9 @@ EOF
     done
 
     cat <<'EOF'
-      APP_CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
-      APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUERS: http://localhost:8080/realms/owldrive,http://127.0.0.1:8080/realms/owldrive
+      APP_CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,https://owl-drive.com,https://www.owl-drive.com
+      APP_CORS_ALLOWED_ORIGIN_PATTERNS: https://*.owl-drive.com
+      APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUERS: https://auth.owl-drive.com/realms/owldrive,http://localhost:8080/realms/owldrive,http://127.0.0.1:8080/realms/owldrive
     ports:
       - "8081:8081"
     depends_on:
@@ -308,11 +329,11 @@ EOF
     build:
       context: ./frontend
       args:
-        NEXT_PUBLIC_API_BASE_URL: http://localhost:8081
-        NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:8080
+        NEXT_PUBLIC_API_BASE_URL: https://api.owl-drive.com
+        NEXT_PUBLIC_KEYCLOAK_URL: https://auth.owl-drive.com
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8081
-      NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:8080
+      NEXT_PUBLIC_API_BASE_URL: https://api.owl-drive.com
+      NEXT_PUBLIC_KEYCLOAK_URL: https://auth.owl-drive.com
     ports:
       - "3000:3000"
     depends_on:

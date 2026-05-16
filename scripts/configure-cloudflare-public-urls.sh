@@ -118,6 +118,10 @@ compose, found_cors = replace_key(compose, "APP_CORS_ALLOWED_ORIGINS", frontend_
 compose, found_issuers = replace_key(compose, "APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUERS", issuer_value)
 compose, found_api_env = replace_key(compose, "NEXT_PUBLIC_API_BASE_URL", backend_url)
 compose, found_keycloak_env = replace_key(compose, "NEXT_PUBLIC_KEYCLOAK_URL", keycloak_url)
+compose, found_kc_proxy = replace_key(compose, "KC_PROXY_HEADERS", "xforwarded")
+compose, found_kc_hostname = replace_key(compose, "KC_HOSTNAME", keycloak_url)
+compose, found_kc_hostname_strict = replace_key(compose, "KC_HOSTNAME_STRICT", '"false"')
+compose, found_kc_http_enabled = replace_key(compose, "KC_HTTP_ENABLED", '"true"')
 
 if not found_cors:
     compose = compose.replace(
@@ -132,6 +136,22 @@ if not found_issuers:
         f"      APP_CORS_ALLOWED_ORIGINS: {frontend_url}\n"
         f"      APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUERS: {issuer_value}\n",
     )
+
+if not all([found_kc_proxy, found_kc_hostname, found_kc_hostname_strict, found_kc_http_enabled]):
+    keycloak_env_anchor = "      KC_FEATURES: persistent-user-sessions\n"
+    if keycloak_env_anchor not in compose:
+        raise SystemExit("Unable to find Keycloak environment block in docker-compose.yml")
+
+    additions = ""
+    if not found_kc_proxy:
+        additions += "      KC_PROXY_HEADERS: xforwarded\n"
+    if not found_kc_hostname:
+        additions += f"      KC_HOSTNAME: {keycloak_url}\n"
+    if not found_kc_hostname_strict:
+        additions += '      KC_HOSTNAME_STRICT: "false"\n'
+    if not found_kc_http_enabled:
+        additions += '      KC_HTTP_ENABLED: "true"\n'
+    compose = compose.replace(keycloak_env_anchor, keycloak_env_anchor + additions)
 
 if not found_api_env or not found_keycloak_env:
     raise SystemExit("Unable to find frontend NEXT_PUBLIC_* environment keys in docker-compose.yml")

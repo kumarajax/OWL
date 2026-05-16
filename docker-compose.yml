@@ -36,6 +36,10 @@ services:
       KC_DB_USERNAME: ${POSTGRES_USER:-owldrive}
       KC_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       KC_FEATURES: persistent-user-sessions
+      KC_PROXY_HEADERS: xforwarded
+      KC_HOSTNAME: https://auth.owl-drive.com
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
     ports:
       - "8080:8080"
     depends_on:
@@ -66,8 +70,9 @@ services:
       APP_STORAGE_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       APP_STORAGE_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
       APP_STORAGE_MINIO_BUCKET: owl-drive
-      APP_CORS_ALLOWED_ORIGINS: https://owl-drive.com
-      APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUERS: http://auth.owl-drive.com/realms/owldrive,https://auth.owl-drive.com/realms/owldrive,http://localhost:8080/realms/owldrive
+      APP_CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,https://owl-drive.com,https://www.owl-drive.com
+      APP_CORS_ALLOWED_ORIGIN_PATTERNS: https://*.owl-drive.com
+      APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUERS: https://auth.owl-drive.com/realms/owldrive,http://localhost:8080/realms/owldrive,http://127.0.0.1:8080/realms/owldrive
     ports:
       - "8081:8081"
     depends_on:

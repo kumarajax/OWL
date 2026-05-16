@@ -1,8 +1,16 @@
 services:
   postgres:
     volumes:
-      - "${DATA_STORAGE_ROOT}/postgres:/var/lib/postgresql/data"
+      - type: bind
+        source: "${DATA_STORAGE_ROOT}/postgres"
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
 
   minio:
     volumes:
-      - "${DATA_STORAGE_ROOT}/minio:/data"
+      - type: bind
+        source: "${DATA_STORAGE_ROOT}/minio"
+        target: /data
+        bind:
+          create_host_path: false
