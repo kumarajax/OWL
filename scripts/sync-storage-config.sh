@@ -22,7 +22,8 @@ Purpose:
 Notes:
   - Remove a DATA_STORAGE_ROOT_N entry to remove the matching shard/pool.
   - Add a DATA_STORAGE_ROOT_N entry to add the matching shard/pool.
-  - This script does not create storage directories.
+  - This script creates the host-side storage directories for every configured
+    shard/pool mount.
 USAGE
 }
 
@@ -122,6 +123,29 @@ EOF
       index=$((index + 1))
     done
   } >"$target"
+}
+
+create_storage_directories() {
+  local root_count="$1"
+  local index=1
+  while (( index <= root_count )); do
+    local root_var
+    root_var="$(root_env_var_name "$index")"
+    local root_value
+    root_value="$(load_env_value "$root_var")"
+    if [ -z "$root_value" ]; then
+      echo "Missing value for $root_var in .env" >&2
+      exit 1
+    fi
+
+    if [ "$index" -eq 1 ]; then
+      mkdir -p "$root_value/postgres" "$root_value/minio"
+    else
+      mkdir -p "$root_value/postgres-shard-$index" "$root_value/minio-$index"
+    fi
+
+    index=$((index + 1))
+  done
 }
 
 normalize_compose_placeholders() {
@@ -373,6 +397,7 @@ main() {
   normalize_compose_placeholders "$COMPOSE_FILE"
   normalize_compose_placeholders "$OVERRIDE_FILE"
   normalize_compose_placeholders "$OVERRIDE_EXAMPLE_FILE"
+  create_storage_directories "$root_count"
   verify_compose_topology "$root_count"
 
   echo "Synchronized compose topology for $root_count storage root(s)."
