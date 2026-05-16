@@ -37,16 +37,19 @@
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3000/*",
         "http://192.168.1.126:3000",
-        "http://192.168.1.126:3000/*"
+        "http://192.168.1.126:3000/*",
+        "https://owl-drive.com",
+        "https://owl-drive.com/*"
       ],
       "webOrigins": [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "http://192.168.1.126:3000"
+        "http://192.168.1.126:3000",
+        "https://owl-drive.com"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:3000/*##http://127.0.0.1:3000/*"
+        "post.logout.redirect.uris": "http://localhost:3000/*##http://127.0.0.1:3000/*##https://owl-drive.com/*"
       }
     }
   ],
