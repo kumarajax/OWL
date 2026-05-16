@@ -27,23 +27,11 @@ Not included:
 - Frontend: `http://localhost:3000`
 - PostgreSQL: `localhost:5432`
 
-The Keycloak realm import seeds local-only test users. Both use a temporary
-password and should be changed immediately after first login.
+The Keycloak realm import seeds local-only test users. Their passwords are
+set from your local `.env` file after startup by:
 
-```text
-username: testuser
-password: Changeme
-email: testuser@example.com
-role: user
-quota: 2 GB
-```
-
-```text
-username: adminuser
-password: Changeme
-email: adminuser@example.com
-role: admin
-quota: unlimited
+```bash
+./scripts/bootstrap-keycloak-passwords.sh
 ```
 
 ## Start Everything
@@ -74,9 +62,10 @@ set -a
 set +a
 mkdir -p "$DATA_STORAGE_ROOT/minio" "$DATA_STORAGE_ROOT/minio-2" "$DATA_STORAGE_ROOT/postgres" "$DATA_STORAGE_ROOT/postgres-shard-2"
 docker compose up --build
+./scripts/bootstrap-keycloak-passwords.sh
 ```
 
-Edit `DATA_STORAGE_ROOT`, `DATA_STORAGE_ROOT_2`, and any later `DATA_STORAGE_ROOT_N` entries in `.env` for your machine. Run `./scripts/sync-storage-config.sh` after changing them so `docker-compose.yml` and the override files stay aligned. Docker Compose reads `.env` and `docker-compose.override.yml` automatically; the generated local files are ignored by git.
+Edit `DATA_STORAGE_ROOT`, `DATA_STORAGE_ROOT_2`, and any later `DATA_STORAGE_ROOT_N` entries in `.env` for your machine. Store all local passwords in the same `.env` file. Run `./scripts/sync-storage-config.sh` after changing the storage roots so `docker-compose.yml` and the override files stay aligned. Docker Compose reads `.env` and `docker-compose.override.yml` automatically; the generated local files are ignored by git.
 
 Stop everything:
 
@@ -200,22 +189,21 @@ When active users reach this limit, the frontend disables account creation and t
 ## Browser Test
 
 1. Start Docker services.
-2. Start backend.
-3. Start frontend.
-4. Open `http://localhost:3000`.
-5. Create an account or login with an account created in Keycloak.
-6. Confirm the sidebar shows `USER` and `0 B of 2.0 GB used`.
-7. Open `My Drive`.
-8. Create a folder.
-9. Open that folder.
-10. Click `Upload File` and upload a small text file.
-11. Confirm the file appears in the list with name, size, type, and modified date.
-12. Click the file download button.
-13. Confirm downloaded file content matches the original.
-14. Delete the file.
-15. Refresh the browser and confirm the deleted file is hidden.
-16. Log out and login as `adminuser`.
-17. Confirm the sidebar shows `ADMIN` and `Unlimited storage`.
+2. Run `./scripts/bootstrap-keycloak-passwords.sh`.
+3. Open `http://localhost:3000`.
+4. Create an account or login with an account created in Keycloak.
+5. Confirm the sidebar shows `USER` and `0 B of 2.0 GB used`.
+6. Open `My Drive`.
+7. Create a folder.
+8. Open that folder.
+9. Click `Upload File` and upload a small text file.
+10. Confirm the file appears in the list with name, size, type, and modified date.
+11. Click the file download button.
+12. Confirm downloaded file content matches the original.
+13. Delete the file.
+14. Refresh the browser and confirm the deleted file is hidden.
+15. Log out and login as `adminuser`.
+16. Confirm the sidebar shows `ADMIN` and `Unlimited storage`.
 
 ## Clone Notes
 
@@ -235,7 +223,7 @@ On Windows, run the commands from Git Bash or WSL, and use Docker Desktop so `do
 
 Earlier local setup issues included:
 
-- `infra/keycloak/realm-export.json` previously seeded reusable test passwords. The seeded users now use temporary `Changeme` credentials for local setup.
+- `infra/keycloak/realm-export.json` previously seeded reusable test passwords. Those passwords are now applied from your local `.env` file after startup.
 - Backend CORS and Keycloak redirect settings only allowed `http://localhost:3000`, not `http://127.0.0.1:3000`.
 - The Next dev server needed an explicit local allowed-origin entry when accessed through `127.0.0.1`.
 
@@ -247,7 +235,7 @@ Get a token:
 
 ```bash
 OWL_USERNAME='testuser'
-OWL_PASSWORD='Changeme'
+OWL_PASSWORD='your-local-seeded-password'
 TOKEN=$(curl -s -X POST http://localhost:8080/realms/owldrive/protocol/openid-connect/token \
   -H 'Content-Type: application/x-www-form-urlencoded' \
   -d 'grant_type=password' \
@@ -278,7 +266,7 @@ Verify admin storage:
 
 ```bash
 OWL_ADMIN_USERNAME='adminuser'
-OWL_ADMIN_PASSWORD='Changeme'
+OWL_ADMIN_PASSWORD='your-local-seeded-password'
 ADMIN_TOKEN=$(curl -s -X POST http://localhost:8080/realms/owldrive/protocol/openid-connect/token \
   -H 'Content-Type: application/x-www-form-urlencoded' \
   -d 'grant_type=password' \

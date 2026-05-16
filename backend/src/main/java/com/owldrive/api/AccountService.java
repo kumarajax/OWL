@@ -28,6 +28,7 @@ public class AccountService {
     private static final Logger log = LoggerFactory.getLogger(AccountService.class);
 
     private final JdbcTemplate jdbc;
+    private final ShardJdbcRegistry shardJdbcRegistry;
     private final ProvisioningService provisioningService;
     private final ObjectStorageService objectStorageService;
     private final ObjectMapper objectMapper;
@@ -40,6 +41,7 @@ public class AccountService {
 
     public AccountService(
             JdbcTemplate jdbc,
+            ShardJdbcRegistry shardJdbcRegistry,
             ProvisioningService provisioningService,
             ObjectStorageService objectStorageService,
             ObjectMapper objectMapper,
@@ -49,6 +51,7 @@ public class AccountService {
             @Value("${app.keycloak.admin-user:${KEYCLOAK_ADMIN_USER:admin}}") String keycloakAdminUser,
             @Value("${app.keycloak.admin-password:${KEYCLOAK_ADMIN_PASSWORD:admin}}") String keycloakAdminPassword) {
         this.jdbc = jdbc;
+        this.shardJdbcRegistry = shardJdbcRegistry;
         this.provisioningService = provisioningService;
         this.objectStorageService = objectStorageService;
         this.objectMapper = objectMapper;
@@ -62,25 +65,27 @@ public class AccountService {
 
     @Transactional
     public void deactivate(Jwt jwt, DeactivateAccountRequest request) {
-        UserRecord user = provisioningService.ensureUser(jwt);
+        LocatedUserRecord located = provisioningService.locateUser(jwt);
+        UserRecord user = located.user();
+        JdbcTemplate shardJdbc = shardJdbcRegistry.jdbc(located.shardId());
         String confirmation = request == null ? "" : request.confirmation();
         if (confirmation == null || !confirmation.trim().equalsIgnoreCase(user.email())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Type your email address to confirm account deactivation");
         }
 
-        jdbc.update(
+        shardJdbc.update(
                 """
                 DELETE FROM files
                 WHERE owner_id = ?
                 """,
                 user.id());
-        jdbc.update(
+        shardJdbc.update(
                 """
                 DELETE FROM folders
                 WHERE owner_id = ?
                 """,
                 user.id());
-        jdbc.update(
+        shardJdbc.update(
                 """
                 UPDATE users
                 SET deactivated_at = now(), used_bytes = 0

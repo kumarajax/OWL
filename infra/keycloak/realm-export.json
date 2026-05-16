@@ -60,13 +60,6 @@
       "lastName": "User",
       "realmRoles": [
         "user"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Changeme",
-          "temporary": true
-        }
       ]
     },
     {
@@ -78,13 +71,6 @@
       "lastName": "User",
       "realmRoles": [
         "admin"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Changeme",
-          "temporary": true
-        }
       ]
     }
   ]

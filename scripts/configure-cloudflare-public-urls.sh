@@ -40,6 +40,12 @@ if [ "$#" -ne 3 ]; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -f "$ROOT_DIR/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$ROOT_DIR/.env"
+  set +a
+fi
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 DOCKERFILE="$ROOT_DIR/frontend/Dockerfile"
 FRONTEND_ENV_FILE="$ROOT_DIR/frontend/.env.local"

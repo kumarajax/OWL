@@ -25,24 +25,27 @@ public class FolderService {
     private static final Logger log = LoggerFactory.getLogger(FolderService.class);
 
     private final JdbcTemplate jdbc;
+    private final ShardJdbcRegistry shardJdbcRegistry;
     private final ProvisioningService provisioningService;
     private final ObjectStorageService objectStorageService;
 
     public FolderService(
             JdbcTemplate jdbc,
+            ShardJdbcRegistry shardJdbcRegistry,
             ProvisioningService provisioningService,
             ObjectStorageService objectStorageService) {
         this.jdbc = jdbc;
+        this.shardJdbcRegistry = shardJdbcRegistry;
         this.provisioningService = provisioningService;
         this.objectStorageService = objectStorageService;
     }
 
-    @Transactional(readOnly = true)
     public List<DriveItemRecord> children(Jwt jwt, UUID folderId) {
         UserRecord user = provisioningService.ensureUser(jwt);
-        requireOwnedActiveFolder(user, folderId);
+        JdbcTemplate shardJdbc = currentJdbc();
+        requireOwnedActiveFolder(shardJdbc, user, folderId);
         List<DriveItemRecord> items = new ArrayList<>();
-        List<FolderRecord> folders = jdbc.query(
+        List<FolderRecord> folders = shardJdbc.query(
                 """
                 SELECT id, name, owner_id, parent_id, created_at, updated_at, deleted_at
                 FROM folders
@@ -54,7 +57,7 @@ public class FolderService {
                 folderId);
         folders.stream().map(DriveItemRecord::folder).forEach(items::add);
 
-        jdbc.query(
+        shardJdbc.query(
                 """
                 SELECT id, owner_id, parent_folder_id, original_name, storage_pool, storage_key, content_type,
                        size_bytes, checksum_sha256, created_at, updated_at, deleted_at
@@ -77,10 +80,11 @@ public class FolderService {
         }
         FolderRecord parent = requireOwnedActiveFolder(user, parentId);
         String name = validateName(request.name());
-        rejectDuplicateName(user.id(), parent.id(), name, null);
+        rejectDuplicateName(currentJdbc(), user.id(), parent.id(), name, null);
 
+        JdbcTemplate shardJdbc = currentJdbc();
         try {
-            return jdbc.queryForObject(
+            return shardJdbc.queryForObject(
                     """
                     INSERT INTO folders (name, owner_id, parent_id)
                     VALUES (?, ?, ?)
@@ -97,12 +101,13 @@ public class FolderService {
 
     @Transactional
     FolderRecord resolveOrCreateFolderPath(UserRecord user, UUID baseFolderId, List<String> pathSegments) {
-        FolderRecord current = requireOwnedActiveFolder(user, baseFolderId);
+        JdbcTemplate shardJdbc = currentJdbc();
+        FolderRecord current = requireOwnedActiveFolder(shardJdbc, user, baseFolderId);
         if (pathSegments == null || pathSegments.isEmpty()) {
             return current;
         }
         for (String rawSegment : pathSegments) {
-            current = getOrCreateChildFolder(user, current.id(), rawSegment);
+            current = getOrCreateChildFolder(shardJdbc, user, current.id(), rawSegment);
         }
         return current;
     }
@@ -110,7 +115,8 @@ public class FolderService {
     @Transactional
     public FolderRecord update(Jwt jwt, UUID folderId, Map<String, Object> request) {
         UserRecord user = provisioningService.ensureUser(jwt);
-        FolderRecord folder = requireOwnedActiveFolder(user, folderId);
+        JdbcTemplate shardJdbc = currentJdbc();
+        FolderRecord folder = requireOwnedActiveFolder(shardJdbc, user, folderId);
         if (request == null || request.isEmpty()) {
             throw badRequest("At least one field is required");
         }
@@ -144,15 +150,15 @@ public class FolderService {
             if (folder.id().equals(newParentId)) {
                 throw badRequest("Folder cannot be moved into itself");
             }
-            requireOwnedActiveFolder(user, newParentId);
-            if (isFolderInSubtree(user.id(), folder.id(), newParentId)) {
+            requireOwnedActiveFolder(shardJdbc, user, newParentId);
+            if (isFolderInSubtree(shardJdbc, user.id(), folder.id(), newParentId)) {
                 throw badRequest("Folder cannot be moved into one of its descendants");
             }
         }
 
-        rejectDuplicateName(user.id(), newParentId, newName, folder.id());
+        rejectDuplicateName(shardJdbc, user.id(), newParentId, newName, folder.id());
 
-        return jdbc.queryForObject(
+        return shardJdbc.queryForObject(
                 """
                 UPDATE folders
                 SET name = ?, parent_id = ?, updated_at = now()
@@ -168,11 +174,12 @@ public class FolderService {
     @Transactional
     public void delete(Jwt jwt, UUID folderId) {
         UserRecord user = provisioningService.ensureUser(jwt);
-        FolderRecord folder = requireOwnedActiveFolder(user, folderId);
+        JdbcTemplate shardJdbc = currentJdbc();
+        FolderRecord folder = requireOwnedActiveFolder(shardJdbc, user, folderId);
         if (folder.parentId() == null) {
             throw badRequest("Root folder cannot be deleted");
         }
-        List<DeletedFileBytes> deletedFileBytes = jdbc.query(
+        List<DeletedFileBytes> deletedFileBytes = shardJdbc.query(
                 """
                 WITH RECURSIVE subtree AS (
                   SELECT id
@@ -197,7 +204,7 @@ public class FolderService {
                 user.id());
         long releasedBytes = deletedFileBytes.stream().mapToLong(DeletedFileBytes::sizeBytes).sum();
 
-        jdbc.update(
+        shardJdbc.update(
                 """
                 WITH RECURSIVE subtree AS (
                   SELECT id
@@ -217,7 +224,7 @@ public class FolderService {
                 user.id(),
                 user.id());
 
-        jdbc.update(
+        shardJdbc.update(
                 """
                 WITH RECURSIVE subtree AS (
                   SELECT id
@@ -240,7 +247,7 @@ public class FolderService {
                 user.id(),
                 user.id());
         if (releasedBytes > 0) {
-            jdbc.update(
+            shardJdbc.update(
                     """
                     UPDATE users
                     SET used_bytes = GREATEST(used_bytes - ?, 0)
@@ -273,7 +280,11 @@ public class FolderService {
     }
 
     FolderRecord requireOwnedActiveFolder(UserRecord user, UUID folderId) {
-        FolderRecord folder = jdbc.query(
+        return requireOwnedActiveFolder(currentJdbc(), user, folderId);
+    }
+
+    FolderRecord requireOwnedActiveFolder(JdbcTemplate shardJdbc, UserRecord user, UUID folderId) {
+        FolderRecord folder = shardJdbc.query(
                 """
                 SELECT id, name, owner_id, parent_id, created_at, updated_at, deleted_at
                 FROM folders
@@ -290,14 +301,14 @@ public class FolderService {
         return folder;
     }
 
-    private FolderRecord getOrCreateChildFolder(UserRecord user, UUID parentId, String rawName) {
+    private FolderRecord getOrCreateChildFolder(JdbcTemplate shardJdbc, UserRecord user, UUID parentId, String rawName) {
         String name = validateName(rawName);
-        FolderRecord existing = findActiveChildFolder(user.id(), parentId, name);
+        FolderRecord existing = findActiveChildFolder(shardJdbc, user.id(), parentId, name);
         if (existing != null) {
             return existing;
         }
         try {
-            return jdbc.queryForObject(
+            return shardJdbc.queryForObject(
                     """
                     INSERT INTO folders (name, owner_id, parent_id)
                     VALUES (?, ?, ?)
@@ -308,7 +319,7 @@ public class FolderService {
                     user.id(),
                     parentId);
         } catch (DataIntegrityViolationException ex) {
-            FolderRecord retry = findActiveChildFolder(user.id(), parentId, name);
+            FolderRecord retry = findActiveChildFolder(shardJdbc, user.id(), parentId, name);
             if (retry != null) {
                 return retry;
             }
@@ -316,8 +327,8 @@ public class FolderService {
         }
     }
 
-    private FolderRecord findActiveChildFolder(UUID ownerId, UUID parentId, String name) {
-        return jdbc.query(
+    private FolderRecord findActiveChildFolder(JdbcTemplate shardJdbc, UUID ownerId, UUID parentId, String name) {
+        return shardJdbc.query(
                 """
                 SELECT id, name, owner_id, parent_id, created_at, updated_at, deleted_at
                 FROM folders
@@ -352,8 +363,8 @@ public class FolderService {
         return name;
     }
 
-    private void rejectDuplicateName(UUID ownerId, UUID parentId, String name, UUID currentFolderId) {
-        Integer count = jdbc.queryForObject(
+    private void rejectDuplicateName(JdbcTemplate shardJdbc, UUID ownerId, UUID parentId, String name, UUID currentFolderId) {
+        Integer count = shardJdbc.queryForObject(
                 """
                 SELECT count(*)
                 FROM folders
@@ -374,8 +385,8 @@ public class FolderService {
         }
     }
 
-    private boolean isFolderInSubtree(UUID ownerId, UUID rootFolderId, UUID candidateFolderId) {
-        Boolean exists = jdbc.queryForObject(
+    private boolean isFolderInSubtree(JdbcTemplate shardJdbc, UUID ownerId, UUID rootFolderId, UUID candidateFolderId) {
+        Boolean exists = shardJdbc.queryForObject(
                 """
                 WITH RECURSIVE subtree AS (
                   SELECT id
@@ -395,6 +406,10 @@ public class FolderService {
                 ownerId,
                 candidateFolderId);
         return Boolean.TRUE.equals(exists);
+    }
+
+    private JdbcTemplate currentJdbc() {
+        return shardJdbcRegistry.currentOrPrimary();
     }
 
     private UUID parseUuid(String value, String field) {

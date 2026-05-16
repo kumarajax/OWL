@@ -44,7 +44,8 @@ public class FileShareService {
     @Transactional
     public FileShareRecord create(Jwt jwt, UUID fileId, CreateFileShareRequest request, String publicUrlBase) {
         UserRecord user = provisioningService.ensureUser(jwt);
-        FileRecord file = requireOwnedActiveFile(user, fileId);
+        JdbcTemplate shardJdbc = currentJdbc();
+        FileRecord file = requireOwnedActiveFile(shardJdbc, user, fileId);
         Integer expiresInDays = request == null ? null : request.expiresInDays();
         if (expiresInDays != null && (expiresInDays < 1 || expiresInDays > 365)) {
             throw badRequest("expiresInDays must be between 1 and 365");
@@ -53,7 +54,7 @@ public class FileShareService {
         String token = randomToken();
         String tokenHash = sha256Hex(token);
         OffsetDateTime expiresAt = expiresInDays == null ? null : OffsetDateTime.now().plusDays(expiresInDays);
-        return jdbc.queryForObject(
+        return shardJdbc.queryForObject(
                 """
                 INSERT INTO file_shares (file_id, owner_id, token_hash, expires_at)
                 VALUES (?, ?, ?, ?)
@@ -69,8 +70,9 @@ public class FileShareService {
     @Transactional(readOnly = true)
     public List<FileShareRecord> list(Jwt jwt, UUID fileId) {
         UserRecord user = provisioningService.ensureUser(jwt);
-        FileRecord file = requireOwnedActiveFile(user, fileId);
-        return jdbc.query(
+        JdbcTemplate shardJdbc = currentJdbc();
+        FileRecord file = requireOwnedActiveFile(shardJdbc, user, fileId);
+        return shardJdbc.query(
                 """
                 SELECT id, file_id, owner_id, expires_at, revoked_at, download_count, last_downloaded_at, created_at
                 FROM file_shares
@@ -85,8 +87,9 @@ public class FileShareService {
     @Transactional
     public void revoke(Jwt jwt, UUID fileId, UUID shareId) {
         UserRecord user = provisioningService.ensureUser(jwt);
-        FileRecord file = requireOwnedActiveFile(user, fileId);
-        int updated = jdbc.update(
+        JdbcTemplate shardJdbc = currentJdbc();
+        FileRecord file = requireOwnedActiveFile(shardJdbc, user, fileId);
+        int updated = shardJdbc.update(
                 """
                 UPDATE file_shares
                 SET revoked_at = COALESCE(revoked_at, now())
@@ -129,7 +132,11 @@ public class FileShareService {
     }
 
     private FileRecord requireOwnedActiveFile(UserRecord user, UUID fileId) {
-        FileRecord file = jdbc.query(
+        return requireOwnedActiveFile(currentJdbc(), user, fileId);
+    }
+
+    private FileRecord requireOwnedActiveFile(JdbcTemplate shardJdbc, UserRecord user, UUID fileId) {
+        FileRecord file = shardJdbc.query(
                 """
                 SELECT id, owner_id, parent_folder_id, original_name, storage_pool, storage_key, content_type,
                        size_bytes, checksum_sha256, created_at, updated_at, deleted_at
@@ -144,7 +151,7 @@ public class FileShareService {
         if (!file.ownerId().equals(user.id())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "File belongs to another user");
         }
-        folderService.requireOwnedActiveFolder(user, file.parentFolderId());
+        folderService.requireOwnedActiveFolder(shardJdbc, user, file.parentFolderId());
         return file;
     }
 
@@ -199,5 +206,9 @@ public class FileShareService {
 
     private ResponseStatusException notFound(String message) {
         return new ResponseStatusException(HttpStatus.NOT_FOUND, message);
+    }
+
+    private JdbcTemplate currentJdbc() {
+        return shardJdbcRegistry.currentOrPrimary();
     }
 }

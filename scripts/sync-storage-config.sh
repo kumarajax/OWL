@@ -124,6 +124,19 @@ EOF
   } >"$target"
 }
 
+normalize_compose_placeholders() {
+  local target="$1"
+  python3 - "$target" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+text = text.replace(r'\${', '${')
+path.write_text(text)
+PY
+}
+
 render_compose_file() {
   local target="$1"
   local root_count="$2"
@@ -133,9 +146,9 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_DB: owldrive
-      POSTGRES_USER: owldrive
-      POSTGRES_PASSWORD: owldrive_dev_password
+      POSTGRES_DB: \${POSTGRES_DB:-owldrive}
+      POSTGRES_USER: \${POSTGRES_USER:-owldrive}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     ports:
       - "5432:5432"
     volumes:
@@ -150,9 +163,9 @@ EOF
   postgres-shard-$index:
     image: postgres:16
     environment:
-      POSTGRES_DB: owldrive
-      POSTGRES_USER: owldrive
-      POSTGRES_PASSWORD: owldrive_dev_password
+      POSTGRES_DB: \${POSTGRES_DB:-owldrive}
+      POSTGRES_USER: \${POSTGRES_USER:-owldrive}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     ports:
       - "$host_port:5432"
     volumes:
@@ -168,12 +181,12 @@ EOF
     depends_on:
       - postgres
     environment:
-      PGPASSWORD: owldrive_dev_password
+      PGPASSWORD: \${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     command:
       [
         "sh",
         "-lc",
-        "until pg_isready -h postgres -U owldrive -d owldrive >/dev/null 2>&1; do sleep 1; done; psql -h postgres -U owldrive -d owldrive -v ON_ERROR_STOP=1 -c 'CREATE SCHEMA IF NOT EXISTS keycloak AUTHORIZATION owldrive;'"
+        "until pg_isready -h postgres -U ${POSTGRES_USER:-owldrive} -d ${POSTGRES_DB:-owldrive} >/dev/null 2>&1; do sleep 1; done; psql -h postgres -U ${POSTGRES_USER:-owldrive} -d ${POSTGRES_DB:-owldrive} -v ON_ERROR_STOP=1 -c 'CREATE SCHEMA IF NOT EXISTS keycloak AUTHORIZATION ${POSTGRES_USER:-owldrive};'"
       ]
     restart: "no"
 
@@ -182,12 +195,12 @@ EOF
       context: ./infra/keycloak
     command: ["start-dev", "--import-realm"]
     environment:
-      KEYCLOAK_ADMIN: admin
-      KEYCLOAK_ADMIN_PASSWORD: admin
+      KEYCLOAK_ADMIN: \${KEYCLOAK_ADMIN_USER:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: \${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
       KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://postgres:5432/owldrive?currentSchema=keycloak
-      KC_DB_USERNAME: owldrive
-      KC_DB_PASSWORD: owldrive_dev_password
+      KC_DB_URL: jdbc:postgresql://postgres:5432/\${POSTGRES_DB:-owldrive}?currentSchema=keycloak
+      KC_DB_USERNAME: \${POSTGRES_USER:-owldrive}
+      KC_DB_PASSWORD: \${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       KC_FEATURES: persistent-user-sessions
     ports:
       - "8080:8080"
@@ -199,8 +212,8 @@ EOF
     image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: \${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: \${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -218,8 +231,8 @@ EOF
     image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: \${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: \${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
     ports:
       - "$api_port:9000"
       - "$console_port:9001"
@@ -236,12 +249,12 @@ EOF
       context: ./backend
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/owldrive?currentSchema=app
-      SPRING_DATASOURCE_USERNAME: owldrive
-      SPRING_DATASOURCE_PASSWORD: owldrive_dev_password
+      SPRING_DATASOURCE_USERNAME: \${POSTGRES_USER:-owldrive}
+      SPRING_DATASOURCE_PASSWORD: \${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       KEYCLOAK_INTERNAL_URL: http://keycloak:8080
       APP_STORAGE_MINIO_ENDPOINT: http://minio:9000
-      APP_STORAGE_MINIO_ACCESS_KEY: minioadmin
-      APP_STORAGE_MINIO_SECRET_KEY: minioadmin
+      APP_STORAGE_MINIO_ACCESS_KEY: \${MINIO_ROOT_USER:-minioadmin}
+      APP_STORAGE_MINIO_SECRET_KEY: \${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
       APP_STORAGE_MINIO_BUCKET: owl-drive
 EOF
 
@@ -250,13 +263,13 @@ EOF
     while (( index <= root_count )); do
       cat <<EOF
       APP_STORAGE_POSTGRES_SHARDS_${extra_index}_NAME: shard-$index
-      APP_STORAGE_POSTGRES_SHARDS_${extra_index}_JDBC_URL: jdbc:postgresql://postgres-shard-$index:5432/owldrive?currentSchema=app
-      APP_STORAGE_POSTGRES_SHARDS_${extra_index}_USERNAME: owldrive
-      APP_STORAGE_POSTGRES_SHARDS_${extra_index}_PASSWORD: owldrive_dev_password
+      APP_STORAGE_POSTGRES_SHARDS_${extra_index}_JDBC_URL: jdbc:postgresql://postgres-shard-$index:5432/\${POSTGRES_DB:-owldrive}?currentSchema=app
+      APP_STORAGE_POSTGRES_SHARDS_${extra_index}_USERNAME: \${POSTGRES_USER:-owldrive}
+      APP_STORAGE_POSTGRES_SHARDS_${extra_index}_PASSWORD: \${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       APP_STORAGE_MINIO_POOLS_${extra_index}_NAME: pool-$index
       APP_STORAGE_MINIO_POOLS_${extra_index}_ENDPOINT: http://minio-$index:9000
-      APP_STORAGE_MINIO_POOLS_${extra_index}_ACCESS_KEY: minioadmin
-      APP_STORAGE_MINIO_POOLS_${extra_index}_SECRET_KEY: minioadmin
+      APP_STORAGE_MINIO_POOLS_${extra_index}_ACCESS_KEY: \${MINIO_ROOT_USER:-minioadmin}
+      APP_STORAGE_MINIO_POOLS_${extra_index}_SECRET_KEY: \${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
       APP_STORAGE_MINIO_POOLS_${extra_index}_BUCKET: owl-drive
 EOF
       index=$((index + 1))
@@ -357,6 +370,9 @@ main() {
   render_compose_file "$COMPOSE_FILE" "$root_count"
   render_override_file "$OVERRIDE_FILE" "$root_count"
   render_override_file "$OVERRIDE_EXAMPLE_FILE" "$root_count"
+  normalize_compose_placeholders "$COMPOSE_FILE"
+  normalize_compose_placeholders "$OVERRIDE_FILE"
+  normalize_compose_placeholders "$OVERRIDE_EXAMPLE_FILE"
   verify_compose_topology "$root_count"
 
   echo "Synchronized compose topology for $root_count storage root(s)."
