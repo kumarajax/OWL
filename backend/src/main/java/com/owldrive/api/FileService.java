@@ -27,6 +27,7 @@ public class FileService {
     private static final Logger log = LoggerFactory.getLogger(FileService.class);
 
     private final JdbcTemplate jdbc;
+    private final ShardJdbcRegistry shardJdbcRegistry;
     private final ProvisioningService provisioningService;
     private final FolderService folderService;
     private final ObjectStorageService objectStorageService;
@@ -35,12 +36,14 @@ public class FileService {
 
     public FileService(
             JdbcTemplate jdbc,
+            ShardJdbcRegistry shardJdbcRegistry,
             ProvisioningService provisioningService,
             FolderService folderService,
             ObjectStorageService objectStorageService,
             @Value("${app.storage.max-upload-bytes:1073741824}") long maxUploadBytes,
             @Value("${app.storage.reject-empty-files:true}") boolean rejectEmptyFiles) {
         this.jdbc = jdbc;
+        this.shardJdbcRegistry = shardJdbcRegistry;
         this.provisioningService = provisioningService;
         this.folderService = folderService;
         this.objectStorageService = objectStorageService;
@@ -70,7 +73,7 @@ public class FileService {
         validateUpload(upload);
         UploadPath uploadPath = parseUploadPath(relativePath, upload.getOriginalFilename());
         FolderRecord destinationFolder = folderService.resolveOrCreateFolderPath(user, parentFolderId, uploadPath.folderSegments());
-        FileRecord existing = findActiveFileByName(user.id(), destinationFolder.id(), uploadPath.fileName());
+        FileRecord existing = findActiveFileByName(currentJdbc(), user.id(), destinationFolder.id(), uploadPath.fileName());
         if (existing != null) {
             return overwriteExistingFile(user, existing, uploadPath.fileName(), upload);
         }
@@ -94,7 +97,8 @@ public class FileService {
     @Transactional
     public FileRecord update(Jwt jwt, UUID fileId, Map<String, Object> request) {
         UserRecord user = provisioningService.ensureUser(jwt);
-        FileRecord file = requireOwnedActiveFile(user, fileId);
+        JdbcTemplate shardJdbc = currentJdbc();
+        FileRecord file = requireOwnedActiveFile(shardJdbc, user, fileId);
         if (request == null || !request.containsKey("parentFolderId")) {
             throw badRequest("parentFolderId is required");
         }
@@ -107,9 +111,9 @@ public class FileService {
         if (file.parentFolderId().equals(parent.id())) {
             return file;
         }
-        rejectDuplicateFileName(user.id(), parent.id(), file.originalName());
+        rejectDuplicateFileName(shardJdbc, user.id(), parent.id(), file.originalName());
         try {
-            return jdbc.queryForObject(
+            return shardJdbc.queryForObject(
                     """
                     UPDATE files
                     SET parent_folder_id = ?, updated_at = now()
@@ -140,7 +144,7 @@ public class FileService {
             reserveUserStorage(user, storedFile.sizeBytes());
             return insertFileRecord(user, parentFolderId, fileId, originalName, upload, storedFile);
         } catch (DataIntegrityViolationException ex) {
-            FileRecord existing = findActiveFileByName(user.id(), parentFolderId, originalName);
+            FileRecord existing = findActiveFileByName(currentJdbc(), user.id(), parentFolderId, originalName);
             if (existing != null) {
                 adjustUserStorage(user, -existing.sizeBytes());
                 return overwriteStoredBytes(user, existing, originalName, upload, storedFile);
@@ -171,8 +175,9 @@ public class FileService {
     }
 
     private FileRecord overwriteStoredBytes(UserRecord user, FileRecord existingFile, String originalName, MultipartFile upload, StoredFile storedFile) {
+        JdbcTemplate shardJdbc = currentJdbc();
         try {
-            FileRecord updated = jdbc.queryForObject(
+            FileRecord updated = shardJdbc.queryForObject(
                     """
                     UPDATE files
                     SET storage_pool = ?, storage_key = ?, content_type = ?, size_bytes = ?, checksum_sha256 = ?,
@@ -203,8 +208,9 @@ public class FileService {
     }
 
     private FileRecord insertFileRecord(UserRecord user, UUID parentFolderId, UUID fileId, String originalName, MultipartFile upload, StoredFile storedFile) {
+        JdbcTemplate shardJdbc = currentJdbc();
         try {
-            return jdbc.queryForObject(
+            return shardJdbc.queryForObject(
                     """
                     INSERT INTO files (
                       id, owner_id, parent_folder_id, original_name, storage_pool, storage_key,
@@ -233,8 +239,9 @@ public class FileService {
     @Transactional
     public void delete(Jwt jwt, UUID fileId) {
         UserRecord user = provisioningService.ensureUser(jwt);
-        FileRecord file = requireOwnedActiveFile(user, fileId);
-        jdbc.update(
+        JdbcTemplate shardJdbc = currentJdbc();
+        FileRecord file = requireOwnedActiveFile(shardJdbc, user, fileId);
+        shardJdbc.update(
                 """
                 UPDATE files
                 SET deleted_at = now(), updated_at = now()
@@ -251,7 +258,7 @@ public class FileService {
     }
 
     private void adjustUserStorage(UserRecord user, long deltaBytes) {
-        int updated = jdbc.update(
+        int updated = currentJdbc().update(
                 """
                 UPDATE users
                 SET used_bytes = used_bytes + ?
@@ -269,7 +276,7 @@ public class FileService {
     }
 
     private void releaseUserStorage(UserRecord user, long sizeBytes) {
-        jdbc.update(
+        currentJdbc().update(
                 """
                 UPDATE users
                 SET used_bytes = GREATEST(used_bytes - ?, 0)
@@ -300,8 +307,38 @@ public class FileService {
         }
     }
 
-    private FileRecord findActiveFileByName(UUID ownerId, UUID parentFolderId, String originalName) {
-        return jdbc.query(
+    private void rejectDuplicateFileName(JdbcTemplate shardJdbc, UUID ownerId, UUID parentFolderId, String originalName) {
+        if (findActiveFileByName(shardJdbc, ownerId, parentFolderId, originalName) != null) {
+            throw badRequest("A file with this name already exists here");
+        }
+    }
+
+    private FileRecord requireOwnedActiveFile(UserRecord user, UUID fileId) {
+        return requireOwnedActiveFile(currentJdbc(), user, fileId);
+    }
+
+    private FileRecord requireOwnedActiveFile(JdbcTemplate shardJdbc, UserRecord user, UUID fileId) {
+        FileRecord file = shardJdbc.query(
+                """
+                SELECT id, owner_id, parent_folder_id, original_name, storage_pool, storage_key, content_type,
+                       size_bytes, checksum_sha256, created_at, updated_at, deleted_at
+                FROM files
+                WHERE id = ?
+                """,
+                this::mapFile,
+                fileId).stream().findFirst().orElseThrow(() -> notFound("File not found"));
+        if (file.deletedAt() != null) {
+            throw notFound("File not found");
+        }
+        if (!file.ownerId().equals(user.id())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "File belongs to another user");
+        }
+        folderService.requireOwnedActiveFolder(shardJdbc, user, file.parentFolderId());
+        return file;
+    }
+
+    private FileRecord findActiveFileByName(JdbcTemplate shardJdbc, UUID ownerId, UUID parentFolderId, String originalName) {
+        return shardJdbc.query(
                 """
                 SELECT id, owner_id, parent_folder_id, original_name, storage_pool, storage_key, content_type,
                        size_bytes, checksum_sha256, created_at, updated_at, deleted_at
@@ -317,30 +354,8 @@ public class FileService {
                 originalName).stream().findFirst().orElse(null);
     }
 
-    private void rejectDuplicateFileName(UUID ownerId, UUID parentFolderId, String originalName) {
-        if (findActiveFileByName(ownerId, parentFolderId, originalName) != null) {
-            throw badRequest("A file with this name already exists here");
-        }
-    }
-
-    private FileRecord requireOwnedActiveFile(UserRecord user, UUID fileId) {
-        FileRecord file = jdbc.query(
-                """
-                SELECT id, owner_id, parent_folder_id, original_name, storage_pool, storage_key, content_type,
-                       size_bytes, checksum_sha256, created_at, updated_at, deleted_at
-                FROM files
-                WHERE id = ?
-                """,
-                this::mapFile,
-                fileId).stream().findFirst().orElseThrow(() -> notFound("File not found"));
-        if (file.deletedAt() != null) {
-            throw notFound("File not found");
-        }
-        if (!file.ownerId().equals(user.id())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "File belongs to another user");
-        }
-        folderService.requireOwnedActiveFolder(user, file.parentFolderId());
-        return file;
+    private JdbcTemplate currentJdbc() {
+        return shardJdbcRegistry.currentOrPrimary();
     }
 
     private void validateUpload(MultipartFile upload) {

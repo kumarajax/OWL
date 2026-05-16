@@ -659,17 +659,23 @@ export default function Home() {
 
   async function loadActiveDrive(headers: Record<string, string>) {
     const storage = await loadStorage(headers);
+    setStorageInfo(storage);
 
     const rootResponse = await fetch(`${apiBaseUrl}/api/drive/root`, { headers });
     const root = await readJson<FolderRecord>(rootResponse);
-
-    const childResponse = await fetch(`${apiBaseUrl}/api/folders/${root.id}/children`, { headers });
-    const rootChildren = await readJson<DriveItem[]>(childResponse);
-
-    setStorageInfo(storage);
     setRootFolder(root);
     setCurrentFolder(root);
     setBreadcrumbs([root]);
+
+    let rootChildren: DriveItem[] = [];
+    try {
+      const childResponse = await fetch(`${apiBaseUrl}/api/folders/${root.id}/children`, { headers });
+      rootChildren = await readJson<DriveItem[]>(childResponse);
+    } catch (err) {
+      if (!(err instanceof Error) || !err.message.includes("404")) {
+        throw err;
+      }
+    }
     setChildren(rootChildren);
     setSelectedFileIds(new Set());
     setBatchMoveTargetId("");

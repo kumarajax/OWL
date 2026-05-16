@@ -77,8 +77,8 @@ public class ShardJdbcRegistry {
         for (Map.Entry<String, JdbcTemplate> entry : shardsById.entrySet()) {
             List<FileRecord> matches = entry.getValue().query(
                     """
-                    SELECT id, owner_id, parent_folder_id, original_name, storage_pool, storage_key,
-                           content_type, size_bytes, checksum_sha256, created_at, updated_at, deleted_at
+                    SELECT f.id, f.owner_id, f.parent_folder_id, f.original_name, f.storage_pool, f.storage_key,
+                           f.content_type, f.size_bytes, f.checksum_sha256, f.created_at, f.updated_at, f.deleted_at
                     FROM files f
                     JOIN file_shares s ON s.file_id = f.id
                     JOIN users u ON u.id = s.owner_id

@@ -8,8 +8,8 @@ spring:
       max-request-size: ${APP_STORAGE_MAX_REQUEST_SIZE:1GB}
   datasource:
     url: jdbc:postgresql://localhost:5432/owldrive?currentSchema=app
-    username: owldrive
-    password: owldrive_dev_password
+    username: ${POSTGRES_USER:owldrive}
+    password: ${POSTGRES_PASSWORD:}
   flyway:
     enabled: false
     schemas: app

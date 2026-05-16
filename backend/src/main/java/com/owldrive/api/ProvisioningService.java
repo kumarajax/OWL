@@ -36,8 +36,12 @@ public class ProvisioningService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public UserRecord currentUser(Jwt jwt) {
         LocatedUserRecord located = locateOrCreateUser(jwt);
-        requireActive(located.user());
         return located.user();
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public LocatedUserRecord locateUser(Jwt jwt) {
+        return locateOrCreateUser(jwt);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -59,10 +63,23 @@ public class ProvisioningService {
 
         String shardId = existing.get().shardId();
         ShardContext.setCurrentShard(shardId);
-        if (existing.get().user().deactivatedAt() != null) {
-            userCapacityService.requireAvailableSlot();
-        }
-        return updateUser(shardId, existing.get().user().id(), keycloakId, email, username, displayName, role, quotaBytes);
+        UserRecord activated = shardJdbcRegistry.jdbc(shardId).queryForObject(
+                """
+                UPDATE users
+                SET keycloak_id = ?, display_name = ?, email = ?, username = ?, role = ?, quota_bytes = ?, used_bytes = 0, deactivated_at = NULL
+                WHERE id = ?
+                RETURNING id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
+                """,
+                this::mapUser,
+                keycloakId,
+                displayName,
+                email == null ? null : email.trim(),
+                username,
+                role,
+                quotaBytes,
+                existing.get().user().id());
+        ensureRootFolder(activated);
+        return activated;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
