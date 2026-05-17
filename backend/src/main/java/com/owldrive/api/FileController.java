@@ -57,6 +57,17 @@ public class FileController {
                 .body(download.resource());
     }
 
+    @GetMapping("/{fileId}/thumbnail")
+    ResponseEntity<InputStreamResource> thumbnail(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable("fileId") UUID fileId) {
+        StorageDownload download = fileService.thumbnail(jwt, fileId);
+        return ResponseEntity.ok()
+                .contentType(MediaType.IMAGE_JPEG)
+                .contentLength(download.sizeBytes())
+                .body(download.resource());
+    }
+
     @DeleteMapping("/{fileId}")
     ResponseEntity<Void> delete(@AuthenticationPrincipal Jwt jwt, @PathVariable("fileId") UUID fileId) {
         fileService.delete(jwt, fileId);

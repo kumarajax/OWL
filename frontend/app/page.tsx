@@ -1,25 +1,35 @@
 "use client";
 
-import { ChangeEvent, DragEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, FormEvent, PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowLeft,
   ChevronRight,
   Copy,
   Download,
+  Film,
   FileText,
   Folder,
   HardDrive,
+  Image as ImageIcon,
   KeyRound,
   Linkedin,
   LogOut,
+  Move,
+  Pause,
   Pencil,
+  Play,
   Plus,
   RefreshCw,
   Share2,
   Save,
+  SkipBack,
+  SkipForward,
+  Volume2,
+  VolumeX,
   Trash2,
   Upload,
+  X,
   UserCircle
 } from "lucide-react";
 
@@ -69,6 +79,8 @@ type DriveItem = {
   createdAt: string;
   updatedAt: string;
 };
+
+type MediaViewerKind = "image" | "video";
 
 type FileShare = {
   id: string;
@@ -286,6 +298,89 @@ function itemToFolder(item: DriveItem): FolderRecord {
   };
 }
 
+function mediaKindForItem(item: DriveItem): MediaViewerKind | null {
+  const contentType = (item.contentType || "").toLowerCase();
+  if (contentType.startsWith("image/")) return "image";
+  if (contentType.startsWith("video/")) return "video";
+
+  const name = item.name.toLowerCase();
+  const imageExtensions = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif", ".tif", ".tiff"];
+  const videoExtensions = [".mp4", ".mov", ".webm", ".m4v", ".avi", ".mkv", ".ogv", ".ogg"];
+  if (imageExtensions.some((ext) => name.endsWith(ext))) return "image";
+  if (videoExtensions.some((ext) => name.endsWith(ext))) return "video";
+  return null;
+}
+
+function MediaThumbnailPreview({
+  item,
+  apiBaseUrl,
+  bearerHeaders
+}: {
+  item: DriveItem;
+  apiBaseUrl: string;
+  bearerHeaders?: Record<string, string>;
+}) {
+  const kind = mediaKindForItem(item);
+  const [thumbnailUrl, setThumbnailUrl] = useState("");
+  const [loading, setLoading] = useState(Boolean(kind));
+
+  useEffect(() => {
+    if (!kind || !bearerHeaders) {
+      setThumbnailUrl("");
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    let objectUrl = "";
+    setLoading(true);
+    setThumbnailUrl("");
+
+    void (async () => {
+      try {
+        const response = await fetch(`${apiBaseUrl}/api/files/${item.id}/thumbnail`, { headers: bearerHeaders });
+        if (!response.ok) {
+          return;
+        }
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (cancelled) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+        setThumbnailUrl(objectUrl);
+      } catch {
+        // Keep the fallback icon.
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [apiBaseUrl, bearerHeaders, item.contentType, item.id, item.name, kind]);
+
+  if (!kind) {
+    return null;
+  }
+
+  if (thumbnailUrl) {
+    return <img src={thumbnailUrl} alt="" className="h-full w-full object-contain" />;
+  }
+
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-slate-100 text-slate-400">
+      {loading ? <RefreshCw className="h-4 w-4 animate-spin" /> : kind === "video" ? <Film className="h-4 w-4" /> : <ImageIcon className="h-4 w-4" />}
+    </div>
+  );
+}
+
 function formatBytes(value: number | null) {
   if (value === null) return "";
   if (value < 1024) return `${value} B`;
@@ -307,6 +402,14 @@ function formatStorage(info: StorageInfo | null) {
 
 function formatDate(value: string) {
   return dateFormatter.format(new Date(value));
+}
+
+function formatDuration(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const wholeSeconds = Math.floor(seconds);
+  const minutes = Math.floor(wholeSeconds / 60);
+  const remainder = wholeSeconds % 60;
+  return `${minutes}:${String(remainder).padStart(2, "0")}`;
 }
 
 function formatName(value: string | undefined | null) {
@@ -423,6 +526,20 @@ export default function Home() {
   const [registrationStatus, setRegistrationStatus] = useState<RegistrationStatus | null>(null);
   const [shareDialogUrl, setShareDialogUrl] = useState("");
   const [shareCopied, setShareCopied] = useState(false);
+  const [mediaViewerOpen, setMediaViewerOpen] = useState(false);
+  const [mediaViewerFile, setMediaViewerFile] = useState<DriveItem | null>(null);
+  const [mediaViewerKind, setMediaViewerKind] = useState<MediaViewerKind | null>(null);
+  const [mediaViewerUrl, setMediaViewerUrl] = useState("");
+  const [mediaViewerLoading, setMediaViewerLoading] = useState(false);
+  const [mediaViewerError, setMediaViewerError] = useState("");
+  const [mediaViewerPosition, setMediaViewerPosition] = useState({ x: 0, y: 0 });
+  const [mediaViewerDragging, setMediaViewerDragging] = useState(false);
+  const [mediaViewerPlaying, setMediaViewerPlaying] = useState(false);
+  const [mediaViewerMuted, setMediaViewerMuted] = useState(false);
+  const [mediaViewerVolume, setMediaViewerVolume] = useState(1);
+  const [mediaViewerPlaybackRate, setMediaViewerPlaybackRate] = useState(1);
+  const [mediaViewerCurrentTime, setMediaViewerCurrentTime] = useState(0);
+  const [mediaViewerDuration, setMediaViewerDuration] = useState(0);
   const [activeView, setActiveView] = useState<"drive" | "telemetry">("drive");
   const [accessLogs, setAccessLogs] = useState<AccessLog[]>([]);
   const [telemetryFilters, setTelemetryFilters] = useState<TelemetryFilters>({
@@ -456,6 +573,17 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const shareLinkInputRef = useRef<HTMLInputElement | null>(null);
+  const mediaViewerVideoRef = useRef<HTMLVideoElement | null>(null);
+  const mediaViewerCacheRef = useRef<Map<string, string>>(new Map());
+  const mediaViewerCacheOrderRef = useRef<string[]>([]);
+  const mediaViewerDragRef = useRef<{
+    pointerId: number;
+    offsetX: number;
+    offsetY: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+  const mediaViewerRequestIdRef = useRef(0);
   const pendingUploadsRef = useRef<File[]>([]);
   const uploadingRef = useRef(false);
   const dragDepthRef = useRef(0);
@@ -505,7 +633,356 @@ export default function Home() {
     pendingUploadsRef.current = pendingUploads;
   }, [pendingUploads]);
 
+  useEffect(() => {
+    return () => {
+      revokeCachedMediaUrls();
+    };
+  }, []);
+
+  function revokeCachedMediaUrls() {
+    for (const url of mediaViewerCacheRef.current.values()) {
+      URL.revokeObjectURL(url);
+    }
+    mediaViewerCacheRef.current.clear();
+    mediaViewerCacheOrderRef.current = [];
+  }
+
+  function clearMediaViewerState() {
+    mediaViewerRequestIdRef.current += 1;
+    mediaViewerDragRef.current = null;
+    setMediaViewerOpen(false);
+    setMediaViewerFile(null);
+    setMediaViewerKind(null);
+    setMediaViewerUrl("");
+    setMediaViewerLoading(false);
+    setMediaViewerError("");
+    setMediaViewerPosition({ x: 0, y: 0 });
+    setMediaViewerDragging(false);
+    setMediaViewerPlaying(false);
+    setMediaViewerMuted(false);
+    setMediaViewerVolume(1);
+    setMediaViewerPlaybackRate(1);
+    setMediaViewerCurrentTime(0);
+    setMediaViewerDuration(0);
+  }
+
+  function closeMediaViewer() {
+    clearMediaViewerState();
+  }
+
+  function cacheMediaViewerUrl(fileId: string, url: string) {
+    const cache = mediaViewerCacheRef.current;
+    const order = mediaViewerCacheOrderRef.current;
+    if (cache.has(fileId)) {
+      const existing = cache.get(fileId);
+      if (existing && existing !== url) {
+        URL.revokeObjectURL(existing);
+      }
+      cache.set(fileId, url);
+      const existingIndex = order.indexOf(fileId);
+      if (existingIndex >= 0) order.splice(existingIndex, 1);
+      order.push(fileId);
+      return;
+    }
+    cache.set(fileId, url);
+    order.push(fileId);
+    while (order.length > 4) {
+      const evictedId = order.shift();
+      if (!evictedId) break;
+      const evictedUrl = cache.get(evictedId);
+      if (evictedUrl) {
+        URL.revokeObjectURL(evictedUrl);
+        cache.delete(evictedId);
+      }
+    }
+  }
+
+  function getCachedMediaViewerUrl(fileId: string) {
+    return mediaViewerCacheRef.current.get(fileId) ?? "";
+  }
+
+  function discardMediaViewerFile(fileId: string) {
+    const cache = mediaViewerCacheRef.current;
+    const order = mediaViewerCacheOrderRef.current;
+    const existing = cache.get(fileId);
+    if (existing) {
+      URL.revokeObjectURL(existing);
+      cache.delete(fileId);
+    }
+    const index = order.indexOf(fileId);
+    if (index >= 0) {
+      order.splice(index, 1);
+    }
+    if (mediaViewerFile?.id === fileId) {
+      closeMediaViewer();
+    }
+  }
+
+  function centerMediaViewerPosition() {
+    const width = Math.min(window.innerWidth - 32, 980);
+    const height = Math.min(window.innerHeight - 32, 720);
+    return {
+      x: Math.max(16, Math.round((window.innerWidth - width) / 2)),
+      y: Math.max(16, Math.round((window.innerHeight - height) / 2))
+    };
+  }
+
+  async function fetchMediaViewerUrl(item: DriveItem) {
+    if (!bearerHeaders) {
+      throw new Error("Session expired. Please log in again.");
+    }
+    const response = await fetch(`${apiBaseUrl}/api/files/${item.id}/download`, { headers: bearerHeaders });
+    if (!response.ok) {
+      await readJson(response);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    cacheMediaViewerUrl(item.id, url);
+    return url;
+  }
+
+  async function openMediaViewer(item: DriveItem) {
+    const kind = mediaKindForItem(item);
+    if (!kind) {
+      await downloadFile(item);
+      return;
+    }
+
+    const requestId = mediaViewerRequestIdRef.current + 1;
+    mediaViewerRequestIdRef.current = requestId;
+    setError("");
+    setMediaViewerOpen(true);
+    setMediaViewerFile(item);
+    setMediaViewerKind(kind);
+    setMediaViewerUrl("");
+    setMediaViewerLoading(true);
+    setMediaViewerError("");
+    setMediaViewerPosition(centerMediaViewerPosition());
+    setMediaViewerDragging(false);
+    setMediaViewerPlaying(false);
+    setMediaViewerMuted(false);
+    setMediaViewerVolume(1);
+    setMediaViewerPlaybackRate(1);
+    setMediaViewerCurrentTime(0);
+    setMediaViewerDuration(0);
+
+    const cachedUrl = getCachedMediaViewerUrl(item.id);
+    if (cachedUrl) {
+      if (mediaViewerRequestIdRef.current === requestId) {
+        setMediaViewerUrl(cachedUrl);
+        setMediaViewerLoading(false);
+      }
+      return;
+    }
+
+    try {
+      const url = await fetchMediaViewerUrl(item);
+      if (mediaViewerRequestIdRef.current === requestId) {
+        setMediaViewerUrl(url);
+      }
+    } catch (err) {
+      if (mediaViewerRequestIdRef.current === requestId) {
+        handleRequestError(err, "Unable to open preview");
+        setMediaViewerError(err instanceof Error ? err.message : "Unable to open preview");
+      }
+    } finally {
+      if (mediaViewerRequestIdRef.current === requestId) {
+        setMediaViewerLoading(false);
+      }
+    }
+  }
+
+  function isInteractiveDoubleClickTarget(target: EventTarget | null) {
+    if (!(target instanceof HTMLElement)) return false;
+    return Boolean(target.closest("button, input, select, textarea, a"));
+  }
+
+  async function handleItemDoubleClick(item: DriveItem) {
+    if (item.itemType === "folder") {
+      await openFolder(itemToFolder(item));
+      return;
+    }
+    await openMediaViewer(item);
+  }
+
+  async function toggleMediaViewerPlayback() {
+    const video = mediaViewerVideoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      try {
+        await video.play();
+      } catch {
+        // Keep the current state if autoplay is blocked.
+      }
+      return;
+    }
+    video.pause();
+  }
+
+  function seekMediaViewer(deltaSeconds: number) {
+    const video = mediaViewerVideoRef.current;
+    if (!video) return;
+    const nextTime = Math.min(Math.max(0, video.currentTime + deltaSeconds), Number.isFinite(video.duration) ? video.duration : video.currentTime + deltaSeconds);
+    video.currentTime = nextTime;
+    setMediaViewerCurrentTime(nextTime);
+  }
+
+  function clampMediaViewerPosition(x: number, y: number) {
+    const width = Math.min(window.innerWidth - 32, 980);
+    const height = Math.min(window.innerHeight - 32, 720);
+    return {
+      x: Math.max(16, Math.min(x, Math.max(16, window.innerWidth - width - 16))),
+      y: Math.max(16, Math.min(y, Math.max(16, window.innerHeight - height - 16)))
+    };
+  }
+
+  function startMediaViewerDrag(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    if (event.target instanceof HTMLElement && event.target.closest("button, input, select, textarea, a")) {
+      return;
+    }
+    const target = event.currentTarget;
+    const rect = target.getBoundingClientRect();
+    mediaViewerDragRef.current = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      startX: rect.left,
+      startY: rect.top
+    };
+    setMediaViewerDragging(true);
+    target.setPointerCapture(event.pointerId);
+  }
+
+  function moveMediaViewerDrag(event: PointerEvent<HTMLDivElement>) {
+    const drag = mediaViewerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const next = clampMediaViewerPosition(event.clientX - drag.offsetX, event.clientY - drag.offsetY);
+    setMediaViewerPosition(next);
+  }
+
+  function endMediaViewerDrag(event: PointerEvent<HTMLDivElement>) {
+    const drag = mediaViewerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    mediaViewerDragRef.current = null;
+    setMediaViewerDragging(false);
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // Ignore release errors when the pointer capture has already been lost.
+    }
+  }
+
+  useEffect(() => {
+    if (!mediaViewerOpen || mediaViewerKind !== "video") {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeMediaViewer();
+        return;
+      }
+      if (!mediaViewerVideoRef.current) return;
+      if (event.key === " " || event.key === "Spacebar") {
+        event.preventDefault();
+        void toggleMediaViewerPlayback();
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        seekMediaViewer(-5);
+        return;
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        seekMediaViewer(5);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [mediaViewerOpen, mediaViewerKind, mediaViewerUrl]);
+
+  useEffect(() => {
+    const video = mediaViewerVideoRef.current;
+    if (!video) return;
+    video.playbackRate = mediaViewerPlaybackRate;
+    video.muted = mediaViewerMuted;
+    video.volume = mediaViewerVolume;
+  }, [mediaViewerPlaybackRate, mediaViewerMuted, mediaViewerVolume, mediaViewerUrl]);
+
+  useEffect(() => {
+    if (mediaViewerKind !== "video" || !mediaViewerUrl) return;
+    const video = mediaViewerVideoRef.current;
+    if (!video) return;
+    void video.play().catch(() => {
+      setMediaViewerPlaying(false);
+    });
+  }, [mediaViewerKind, mediaViewerUrl]);
+
+  function handleMediaViewerLoadedMetadata() {
+    const video = mediaViewerVideoRef.current;
+    if (!video) return;
+    setMediaViewerDuration(Number.isFinite(video.duration) ? video.duration : 0);
+    setMediaViewerCurrentTime(video.currentTime || 0);
+    setMediaViewerPlaying(!video.paused);
+  }
+
+  function handleMediaViewerTimeUpdate() {
+    const video = mediaViewerVideoRef.current;
+    if (!video) return;
+    setMediaViewerCurrentTime(video.currentTime || 0);
+    setMediaViewerDuration(Number.isFinite(video.duration) ? video.duration : 0);
+  }
+
+  function handleMediaViewerPlay() {
+    setMediaViewerPlaying(true);
+  }
+
+  function handleMediaViewerPause() {
+    setMediaViewerPlaying(false);
+  }
+
+  function handleMediaViewerEnded() {
+    setMediaViewerPlaying(false);
+  }
+
+  function handleMediaViewerProgressChange(event: ChangeEvent<HTMLInputElement>) {
+    const video = mediaViewerVideoRef.current;
+    if (!video || !Number.isFinite(video.duration) || video.duration <= 0) return;
+    const nextTime = (Number(event.target.value) / 1000) * video.duration;
+    video.currentTime = nextTime;
+    setMediaViewerCurrentTime(nextTime);
+  }
+
+  function handleMediaViewerVolumeChange(event: ChangeEvent<HTMLInputElement>) {
+    const volume = Number(event.target.value);
+    setMediaViewerVolume(volume);
+    if (volume > 0 && mediaViewerMuted) {
+      setMediaViewerMuted(false);
+    }
+    if (volume === 0) {
+      setMediaViewerMuted(true);
+    }
+  }
+
+  function toggleMediaViewerMute() {
+    setMediaViewerMuted((current) => {
+      if (current && mediaViewerVolume === 0) {
+        setMediaViewerVolume(0.75);
+      }
+      return !current;
+    });
+  }
+
   function clearSession(message = "") {
+    revokeCachedMediaUrls();
+    clearMediaViewerState();
     localStorage.removeItem("owl_access_token");
     localStorage.removeItem("owl_id_token");
     sessionStorage.removeItem("owl_pkce_verifier");
@@ -1255,6 +1732,7 @@ export default function Home() {
           headers: jsonHeaders
         });
         if (!response.ok) await readJson(response);
+        discardMediaViewerFile(fileId);
       }
       setSelectedFileIds(new Set());
       await loadChildren(currentFolder);
@@ -1299,6 +1777,7 @@ export default function Home() {
         headers: jsonHeaders
       });
       if (!response.ok) await readJson(response);
+      discardMediaViewerFile(item.id);
       await loadChildren(currentFolder);
       await refreshStorage();
     } catch (err) {
@@ -1656,6 +2135,186 @@ export default function Home() {
                 <KeyRound className="h-4 w-4" />
                 {changingPassword ? "Updating" : "Update password"}
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {mediaViewerOpen && mediaViewerFile ? (
+        <div className="fixed inset-0 z-50 bg-slate-950/80" onClick={closeMediaViewer}>
+          <div
+            className="absolute overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 shadow-2xl"
+            style={{
+              left: `${mediaViewerPosition.x}px`,
+              top: `${mediaViewerPosition.y}px`,
+              width: "min(92vw, 1100px)",
+              height: "min(88vh, 820px)"
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div
+              className="flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-900/95 px-4 py-3 text-white select-none touch-none cursor-grab active:cursor-grabbing"
+              onPointerDown={startMediaViewerDrag}
+              onPointerMove={moveMediaViewerDrag}
+              onPointerUp={endMediaViewerDrag}
+              onPointerCancel={endMediaViewerDrag}
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-800 text-slate-200">
+                  <Move className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold">{mediaViewerFile.name}</div>
+                  <div className="mt-0.5 text-xs text-slate-400">
+                    {mediaViewerKind === "video" ? "Video preview" : "Image preview"}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => downloadFile(mediaViewerFile)}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm font-semibold text-white hover:bg-slate-800"
+                >
+                  <Download className="h-4 w-4" />
+                  Download
+                </button>
+                <button
+                  type="button"
+                  onClick={closeMediaViewer}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800"
+                  aria-label="Close viewer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex h-[calc(100%-57px)] min-h-0 flex-col bg-black">
+              {mediaViewerLoading ? (
+                <div className="flex flex-1 items-center justify-center text-slate-300">
+                  <div className="flex items-center gap-3 rounded-md border border-slate-800 bg-slate-950/70 px-4 py-3">
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    Loading preview...
+                  </div>
+                </div>
+              ) : mediaViewerError ? (
+                <div className="flex flex-1 items-center justify-center px-6 text-center text-slate-200">
+                  <div className="max-w-md">
+                    <h3 className="text-lg font-semibold">Preview unavailable</h3>
+                    <p className="mt-2 text-sm text-slate-400">{mediaViewerError}</p>
+                    <button
+                      type="button"
+                      onClick={() => downloadFile(mediaViewerFile)}
+                      className="mt-5 inline-flex h-10 items-center gap-2 rounded-md bg-white px-4 text-sm font-semibold text-slate-900"
+                    >
+                      <Download className="h-4 w-4" />
+                      Download original
+                    </button>
+                  </div>
+                </div>
+              ) : mediaViewerKind === "video" ? (
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-3">
+                    <video
+                      ref={mediaViewerVideoRef}
+                      src={mediaViewerUrl}
+                      className="h-full w-full max-h-full max-w-full rounded-md bg-black object-contain"
+                      autoPlay
+                      playsInline
+                      onLoadedMetadata={handleMediaViewerLoadedMetadata}
+                      onTimeUpdate={handleMediaViewerTimeUpdate}
+                      onPlay={handleMediaViewerPlay}
+                      onPause={handleMediaViewerPause}
+                      onEnded={handleMediaViewerEnded}
+                    />
+                  </div>
+                  <div className="border-t border-slate-800 bg-slate-950/95 px-4 py-3 text-white">
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => void toggleMediaViewerPlayback()}
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-700 bg-slate-900 hover:bg-slate-800"
+                        aria-label={mediaViewerPlaying ? "Pause" : "Play"}
+                      >
+                        {mediaViewerPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => seekMediaViewer(-10)}
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-700 bg-slate-900 hover:bg-slate-800"
+                        aria-label="Rewind 10 seconds"
+                      >
+                        <SkipBack className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => seekMediaViewer(10)}
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-700 bg-slate-900 hover:bg-slate-800"
+                        aria-label="Forward 10 seconds"
+                      >
+                        <SkipForward className="h-4 w-4" />
+                      </button>
+                      <div className="min-w-0 flex-1">
+                        <input
+                          type="range"
+                          min="0"
+                          max="1000"
+                          value={mediaViewerDuration > 0 ? Math.round((mediaViewerCurrentTime / mediaViewerDuration) * 1000) : 0}
+                          disabled={mediaViewerDuration <= 0}
+                          onChange={handleMediaViewerProgressChange}
+                          className="h-2 w-full cursor-pointer accent-blue-500"
+                          aria-label="Seek"
+                        />
+                        <div className="mt-1 flex items-center justify-between text-xs text-slate-400">
+                          <span>{formatDuration(mediaViewerCurrentTime)}</span>
+                          <span>{formatDuration(mediaViewerDuration)}</span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={toggleMediaViewerMute}
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-700 bg-slate-900 hover:bg-slate-800"
+                        aria-label={mediaViewerMuted ? "Unmute" : "Mute"}
+                      >
+                        {mediaViewerMuted || mediaViewerVolume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                      </button>
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={mediaViewerMuted ? 0 : mediaViewerVolume}
+                        onChange={handleMediaViewerVolumeChange}
+                        className="w-24 accent-blue-500"
+                        aria-label="Volume"
+                      />
+                      <select
+                        value={String(mediaViewerPlaybackRate)}
+                        onChange={(event) => setMediaViewerPlaybackRate(Number(event.target.value))}
+                        className="h-10 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-white outline-none"
+                        aria-label="Playback speed"
+                      >
+                        {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((rate) => (
+                          <option key={rate} value={rate}>
+                            {rate}x
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-1 items-center justify-center overflow-auto p-4">
+                  <img
+                    src={mediaViewerUrl}
+                    alt={mediaViewerFile.name}
+                    className="block max-h-full max-w-full rounded-md object-contain"
+                  />
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -2410,10 +3069,14 @@ export default function Home() {
                 <div className="px-4 py-12 text-center text-slate-500">{loading || uploading ? "Loading..." : "No files or folders"}</div>
               ) : (
                 children.map((item) => (
-                  <div
-                    key={`${item.itemType}-${item.id}`}
-                    className="border-b border-slate-100 px-4 py-3 text-sm last:border-b-0 hover:bg-slate-50 md:grid md:grid-cols-[44px_minmax(0,1fr)_120px_160px_auto] md:items-center md:gap-3 md:py-2"
-                  >
+                <div
+                  key={`${item.itemType}-${item.id}`}
+                  onDoubleClick={(event) => {
+                    if (isInteractiveDoubleClickTarget(event.target)) return;
+                    void handleItemDoubleClick(item);
+                  }}
+                  className="cursor-pointer border-b border-slate-100 px-4 py-3 text-sm last:border-b-0 hover:bg-slate-50 md:grid md:grid-cols-[44px_minmax(0,1fr)_120px_160px_auto] md:items-center md:gap-3 md:py-2"
+                >
                     <div className="flex items-start gap-3 md:hidden">
                       <div className="pt-1">
                         {item.itemType === "file" ? (
@@ -2428,16 +3091,25 @@ export default function Home() {
                           <div className="h-4 w-4" />
                         )}
                       </div>
+                      {item.itemType === "file" ? (
+                        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-100">
+                          {mediaKindForItem(item) ? (
+                            <MediaThumbnailPreview item={item} apiBaseUrl={apiBaseUrl} bearerHeaders={bearerHeaders} />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-slate-400">
+                              <FileText className="h-5 w-5" />
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
                       <div className="min-w-0 flex-1">
                         <button
                           onClick={item.itemType === "folder" ? () => openFolder(itemToFolder(item)) : undefined}
-                          className={`flex min-w-0 items-center gap-3 text-left ${item.itemType === "folder" ? "rounded-md py-1" : "py-1"}`}
+                          className={`flex min-w-0 items-center text-left ${item.itemType === "folder" ? "gap-3 rounded-md py-1" : "py-1"}`}
                         >
                           {item.itemType === "folder" ? (
                             <Folder className="h-5 w-5 shrink-0 text-blue-600" />
-                          ) : (
-                            <FileText className="h-5 w-5 shrink-0 text-slate-500" />
-                          )}
+                          ) : null}
                           <span className="truncate font-medium">{item.name}</span>
                         </button>
                         {item.itemType === "file" ? (
@@ -2468,7 +3140,15 @@ export default function Home() {
                       </button>
                     ) : (
                       <div className="hidden min-w-0 items-center gap-3 py-2 md:flex">
-                        <FileText className="h-5 w-5 shrink-0 text-slate-500" />
+                        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-100">
+                          {mediaKindForItem(item) ? (
+                            <MediaThumbnailPreview item={item} apiBaseUrl={apiBaseUrl} bearerHeaders={bearerHeaders} />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-slate-400">
+                              <FileText className="h-5 w-5" />
+                            </div>
+                          )}
+                        </div>
                         <div className="min-w-0">
                           <div className="truncate font-medium">{item.name}</div>
                           <div className="truncate text-xs text-slate-500">{item.contentType || "application/octet-stream"}</div>

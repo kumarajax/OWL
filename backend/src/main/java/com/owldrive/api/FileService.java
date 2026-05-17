@@ -1,14 +1,28 @@
 package com.owldrive.api;
 
+import java.awt.AlphaComposite;
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
-import java.util.Map;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import javax.imageio.ImageIO;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.InputStreamResource;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -91,6 +105,37 @@ public class FileService {
             throw notFound("File bytes not found");
         } catch (IOException ex) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to read file", ex);
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public StorageDownload thumbnail(Jwt jwt, UUID fileId) {
+        UserRecord user = provisioningService.ensureUser(jwt);
+        FileRecord file = requireOwnedActiveFile(user, fileId);
+        if (!supportsThumbnail(file)) {
+            throw notFound("Thumbnail unavailable");
+        }
+        String thumbnailKey = thumbnailStorageKey(file);
+        try {
+            return objectStorageService.download(file.storagePool(), thumbnailKey);
+        } catch (java.nio.file.NoSuchFileException ex) {
+            byte[] thumbnailBytes;
+            try {
+                thumbnailBytes = generateThumbnailBytes(file);
+            } catch (IOException thumbnailEx) {
+                throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to generate thumbnail", thumbnailEx);
+            }
+            if (thumbnailBytes == null || thumbnailBytes.length == 0) {
+                throw notFound("Thumbnail unavailable");
+            }
+            try {
+                objectStorageService.storeBytes(file.storagePool(), file.ownerId(), file.id(), "thumbnail.jpg", thumbnailBytes, "image/jpeg");
+            } catch (IOException storeEx) {
+                log.warn("Unable to persist generated thumbnail for file {} at {}", file.id(), thumbnailKey, storeEx);
+            }
+            return new StorageDownload(new InputStreamResource(new ByteArrayInputStream(thumbnailBytes)), thumbnailBytes.length);
+        } catch (IOException ex) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to read thumbnail", ex);
         }
     }
 
@@ -196,7 +241,7 @@ public class FileService {
                     originalName,
                     existingFile.id(),
                     user.id());
-            deleteStoredBytesAfterCommit(existingFile);
+            deleteStoredArtifactsAfterCommit(existingFile);
             return updated;
         } catch (DataIntegrityViolationException ex) {
             deleteStoredBytesQuietly(storedFile);
@@ -250,7 +295,7 @@ public class FileService {
                 file.id(),
                 user.id());
         releaseUserStorage(user, file.sizeBytes());
-        deleteStoredBytesAfterCommit(file);
+        deleteStoredArtifactsAfterCommit(file);
     }
 
     private void reserveUserStorage(UserRecord user, long sizeBytes) {
@@ -286,7 +331,7 @@ public class FileService {
                 user.id());
     }
 
-    private void deleteStoredBytesAfterCommit(FileRecord file) {
+    private void deleteStoredArtifactsAfterCommit(FileRecord file) {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
@@ -294,6 +339,11 @@ public class FileService {
                     objectStorageService.deleteStorageKey(file.storagePool(), file.storageKey());
                 } catch (IOException ex) {
                     log.warn("Unable to delete stored bytes for file {} at {} in pool {}", file.id(), file.storageKey(), file.storagePool(), ex);
+                }
+                try {
+                    objectStorageService.deleteStorageKey(file.storagePool(), thumbnailStorageKey(file));
+                } catch (IOException ex) {
+                    log.warn("Unable to delete stored thumbnail for file {} in pool {}", file.id(), file.storagePool(), ex);
                 }
             }
         });
@@ -305,6 +355,153 @@ public class FileService {
         } catch (IOException ex) {
             log.warn("Unable to delete stored bytes after failed upload at {} in pool {}", storedFile.storageKey(), storedFile.storagePool(), ex);
         }
+    }
+
+    private boolean supportsThumbnail(FileRecord file) {
+        return mediaKind(file) != null;
+    }
+
+    private byte[] generateThumbnailBytes(FileRecord file) throws IOException {
+        MediaKind mediaKind = mediaKind(file);
+        if (mediaKind == null) {
+            return null;
+        }
+
+        StorageDownload download = objectStorageService.download(file.storagePool(), file.storageKey());
+        Path source = Files.createTempFile("owl-thumb-source-", mediaKind == MediaKind.IMAGE ? ".img" : ".vid");
+        Path frame = null;
+        try (InputStream input = download.resource().getInputStream()) {
+            Files.copy(input, source, StandardCopyOption.REPLACE_EXISTING);
+            if (mediaKind == MediaKind.IMAGE) {
+                return encodeJpeg(resizeImage(ImageIO.read(source.toFile())));
+            }
+
+            frame = Files.createTempFile("owl-thumb-frame-", ".jpg");
+            byte[] thumbnail = extractVideoThumbnail(source, frame);
+            if (thumbnail != null) {
+                return thumbnail;
+            }
+            return null;
+        } finally {
+            try {
+                Files.deleteIfExists(source);
+            } catch (IOException ex) {
+                log.debug("Unable to delete thumbnail source temp file {}", source, ex);
+            }
+            if (frame != null) {
+                try {
+                    Files.deleteIfExists(frame);
+                } catch (IOException ex) {
+                    log.debug("Unable to delete thumbnail frame temp file {}", frame, ex);
+                }
+            }
+        }
+    }
+
+    private byte[] extractVideoThumbnail(Path source, Path frame) {
+        List<String> seekPoints = List.of("00:00:01.000", "00:00:00.500", "00:00:00.100", "00:00:00.000");
+        for (String seekPoint : seekPoints) {
+            try {
+                Files.deleteIfExists(frame);
+                Process process = new ProcessBuilder(
+                        "ffmpeg",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-y",
+                        "-ss",
+                        seekPoint,
+                        "-i",
+                        source.toString(),
+                        "-frames:v",
+                        "1",
+                        frame.toString())
+                        .redirectErrorStream(true)
+                        .start();
+                boolean finished = process.waitFor(30, TimeUnit.SECONDS);
+                if (!finished) {
+                    process.destroyForcibly();
+                    continue;
+                }
+                if (process.exitValue() != 0 || !Files.exists(frame) || Files.size(frame) == 0) {
+                    continue;
+                }
+                BufferedImage image = ImageIO.read(frame.toFile());
+                if (image == null) {
+                    continue;
+                }
+                return encodeJpeg(resizeImage(image));
+            } catch (IOException ex) {
+                log.debug("Unable to generate video thumbnail from {}", source, ex);
+                continue;
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private BufferedImage resizeImage(BufferedImage source) {
+        if (source == null) {
+            return null;
+        }
+        int maxDimension = 480;
+        int width = source.getWidth();
+        int height = source.getHeight();
+        if (width <= 0 || height <= 0) {
+            return null;
+        }
+        double scale = Math.min(1.0d, (double) maxDimension / Math.max(width, height));
+        int targetWidth = Math.max(1, (int) Math.round(width * scale));
+        int targetHeight = Math.max(1, (int) Math.round(height * scale));
+        BufferedImage output = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = output.createGraphics();
+        graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        graphics.setComposite(AlphaComposite.Src);
+        graphics.setColor(Color.BLACK);
+        graphics.fillRect(0, 0, targetWidth, targetHeight);
+        graphics.drawImage(source, 0, 0, targetWidth, targetHeight, null);
+        graphics.dispose();
+        return output;
+    }
+
+    private byte[] encodeJpeg(BufferedImage image) throws IOException {
+        if (image == null) {
+            return null;
+        }
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        if (!ImageIO.write(image, "jpg", output)) {
+            return null;
+        }
+        return output.toByteArray();
+    }
+
+    private MediaKind mediaKind(FileRecord file) {
+        String contentType = file.contentType() == null ? "" : file.contentType().toLowerCase();
+        if (contentType.startsWith("image/")) {
+            return MediaKind.IMAGE;
+        }
+        if (contentType.startsWith("video/")) {
+            return MediaKind.VIDEO;
+        }
+        String name = file.originalName() == null ? "" : file.originalName().toLowerCase();
+        if (name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png") || name.endsWith(".gif")
+                || name.endsWith(".webp") || name.endsWith(".bmp") || name.endsWith(".avif")
+                || name.endsWith(".tif") || name.endsWith(".tiff")) {
+            return MediaKind.IMAGE;
+        }
+        if (name.endsWith(".mp4") || name.endsWith(".mov") || name.endsWith(".webm") || name.endsWith(".m4v")
+                || name.endsWith(".avi") || name.endsWith(".mkv") || name.endsWith(".ogv") || name.endsWith(".ogg")) {
+            return MediaKind.VIDEO;
+        }
+        return null;
+    }
+
+    private String thumbnailStorageKey(FileRecord file) {
+        return file.ownerId() + "/" + file.id() + "/thumbnail.jpg";
     }
 
     private void rejectDuplicateFileName(JdbcTemplate shardJdbc, UUID ownerId, UUID parentFolderId, String originalName) {
@@ -430,6 +627,11 @@ public class FileService {
 
     private ResponseStatusException notFound(String message) {
         return new ResponseStatusException(HttpStatus.NOT_FOUND, message);
+    }
+
+    private enum MediaKind {
+        IMAGE,
+        VIDEO
     }
 
     private record UploadPath(List<String> folderSegments, String fileName) {}

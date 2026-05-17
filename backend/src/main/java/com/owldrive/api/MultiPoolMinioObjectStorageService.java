@@ -11,6 +11,7 @@ import io.minio.Result;
 import io.minio.StatObjectArgs;
 import io.minio.errors.ErrorResponseException;
 import io.minio.messages.Item;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.security.DigestInputStream;
@@ -85,6 +86,32 @@ public class MultiPoolMinioObjectStorageService implements ObjectStorageService 
             }
         }
         throw lastError == null ? new IOException("Unable to store file") : lastError;
+    }
+
+    @Override
+    public StoredFile storeBytes(String storagePool, UUID ownerId, UUID fileId, String objectName, byte[] data, String contentType) throws IOException {
+        Pool pool = requirePool(storagePool);
+        ensureBucket(pool);
+        byte[] payload = data == null ? new byte[0] : data;
+        try {
+            String storageKey = storageKey(ownerId, fileId, objectName);
+            MessageDigest digest = sha256Digest();
+            try (InputStream input = new DigestInputStream(new ByteArrayInputStream(payload), digest)) {
+                PutObjectArgs.Builder builder = PutObjectArgs.builder()
+                        .bucket(pool.bucket)
+                        .object(storageKey)
+                        .stream(input, payload.length, UPLOAD_PART_SIZE);
+                if (contentType != null && !contentType.isBlank()) {
+                    builder.contentType(contentType);
+                }
+                pool.client.putObject(builder.build());
+            }
+            return new StoredFile(pool.name, storageKey, HexFormat.of().formatHex(digest.digest()), payload.length);
+        } catch (IOException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IOException("Unable to store file", ex);
+        }
     }
 
     @Override
@@ -192,7 +219,11 @@ public class MultiPoolMinioObjectStorageService implements ObjectStorageService 
     }
 
     private String storageKey(UUID ownerId, UUID fileId) {
-        return ownerId + "/" + fileId + "/original";
+        return storageKey(ownerId, fileId, "original");
+    }
+
+    private String storageKey(UUID ownerId, UUID fileId, String objectName) {
+        return ownerId + "/" + fileId + "/" + objectName;
     }
 
     private MessageDigest sha256Digest() {
