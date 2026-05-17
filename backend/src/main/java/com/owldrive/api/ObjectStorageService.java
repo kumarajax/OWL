@@ -7,6 +7,8 @@ import org.springframework.web.multipart.MultipartFile;
 public interface ObjectStorageService {
     StoredFile store(UUID ownerId, UUID fileId, MultipartFile upload) throws IOException;
 
+    StoredFile storeBytes(String storagePool, UUID ownerId, UUID fileId, String objectName, byte[] data, String contentType) throws IOException;
+
     StorageDownload download(String storagePool, String storageKey) throws IOException;
 
     void deleteStorageKey(String storagePool, String storageKey) throws IOException;
