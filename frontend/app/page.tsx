@@ -4,6 +4,8 @@ import { ChangeEvent, DragEvent, FormEvent, PointerEvent, useCallback, useEffect
 import {
   Activity,
   ArrowLeft,
+  ArrowDown,
+  ArrowUp,
   ChevronRight,
   Copy,
   Download,
@@ -117,6 +119,7 @@ type AccessLog = {
 };
 
 type AccessLogSortKey = "createdAt" | "displayName" | "email" | "ipAddress" | "location" | "method" | "path" | "statusCode" | "durationMs" | "eventType";
+type DriveSortKey = "name" | "size" | "updatedAt";
 
 type TelemetryRetention = {
   maxRetentionRows: number;
@@ -567,6 +570,8 @@ export default function Home() {
   const [savingTelemetryRetention, setSavingTelemetryRetention] = useState(false);
   const [accessLogSortKey, setAccessLogSortKey] = useState<AccessLogSortKey>("createdAt");
   const [accessLogSortDirection, setAccessLogSortDirection] = useState<"asc" | "desc">("desc");
+  const [driveSortKey, setDriveSortKey] = useState<DriveSortKey>("name");
+  const [driveSortDirection, setDriveSortDirection] = useState<"asc" | "desc">("asc");
   const [pendingUploads, setPendingUploads] = useState<File[]>([]);
   const [uploadProgressLabel, setUploadProgressLabel] = useState("");
   const [dragActive, setDragActive] = useState(false);
@@ -1878,6 +1883,15 @@ export default function Home() {
     setAccessLogSortDirection(key === "createdAt" ? "desc" : "asc");
   }
 
+  function sortDriveItems(key: DriveSortKey) {
+    if (driveSortKey === key) {
+      setDriveSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setDriveSortKey(key);
+    setDriveSortDirection(key === "updatedAt" ? "desc" : "asc");
+  }
+
   async function deactivateAccount() {
     if (!jsonHeaders || !user) return;
     const typedEmail = deactivationConfirmation.trim();
@@ -1921,6 +1935,37 @@ export default function Home() {
   ];
   const canViewTelemetry = user?.role === "ADMIN" || user?.role === "OPERATIONS";
   const canManageTelemetryRetention = canViewTelemetry;
+  const sortedChildren = [...children].sort((left, right) => {
+    const leftValue = driveSortKey === "name"
+      ? left.name.toLowerCase()
+      : driveSortKey === "size"
+        ? left.itemType === "folder"
+          ? -1
+          : (left.sizeBytes ?? -1)
+        : new Date(left.updatedAt).getTime();
+    const rightValue = driveSortKey === "name"
+      ? right.name.toLowerCase()
+      : driveSortKey === "size"
+        ? right.itemType === "folder"
+          ? -1
+          : (right.sizeBytes ?? -1)
+        : new Date(right.updatedAt).getTime();
+
+    let comparison = 0;
+    if (typeof leftValue === "number" && typeof rightValue === "number") {
+      comparison = leftValue - rightValue;
+    } else {
+      comparison = String(leftValue).localeCompare(String(rightValue), undefined, { sensitivity: "base" });
+    }
+
+    if (comparison === 0) {
+      comparison = new Date(left.updatedAt).getTime() - new Date(right.updatedAt).getTime();
+    }
+    if (comparison === 0) {
+      comparison = left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
+    }
+    return driveSortDirection === "asc" ? comparison : -comparison;
+  });
   const sortedAccessLogs = [...accessLogs].sort((left, right) => {
     const value = (log: AccessLog) => {
       if (accessLogSortKey === "location") return formatLocation(log);
@@ -3060,23 +3105,56 @@ export default function Home() {
                     className="h-4 w-4"
                   />
                 </div>
-                <div>Name</div>
-                <div>Size</div>
-                <div>Modified</div>
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => sortDriveItems("name")}
+                    className="inline-flex items-center gap-1 hover:text-blue-700"
+                  >
+                    Name
+                    <span className="text-slate-400">
+                      {driveSortKey === "name" ? (driveSortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />) : ""}
+                    </span>
+                  </button>
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => sortDriveItems("size")}
+                    className="inline-flex items-center gap-1 hover:text-blue-700"
+                  >
+                    Size
+                    <span className="text-slate-400">
+                      {driveSortKey === "size" ? (driveSortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />) : ""}
+                    </span>
+                  </button>
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => sortDriveItems("updatedAt")}
+                    className="inline-flex items-center gap-1 hover:text-blue-700"
+                  >
+                    Modified
+                    <span className="text-slate-400">
+                      {driveSortKey === "updatedAt" ? (driveSortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />) : ""}
+                    </span>
+                  </button>
+                </div>
                 <div>Actions</div>
               </div>
               {children.length === 0 ? (
                 <div className="px-4 py-12 text-center text-slate-500">{loading || uploading ? "Loading..." : "No files or folders"}</div>
               ) : (
-                children.map((item) => (
-                <div
-                  key={`${item.itemType}-${item.id}`}
-                  onDoubleClick={(event) => {
-                    if (isInteractiveDoubleClickTarget(event.target)) return;
-                    void handleItemDoubleClick(item);
-                  }}
-                  className="cursor-pointer border-b border-slate-100 px-4 py-3 text-sm last:border-b-0 hover:bg-slate-50 md:grid md:grid-cols-[44px_minmax(0,1fr)_120px_160px_auto] md:items-center md:gap-3 md:py-2"
-                >
+                sortedChildren.map((item) => (
+                  <div
+                    key={`${item.itemType}-${item.id}`}
+                    onDoubleClick={(event) => {
+                      if (isInteractiveDoubleClickTarget(event.target)) return;
+                      void handleItemDoubleClick(item);
+                    }}
+                    className="cursor-pointer border-b border-slate-100 px-4 py-3 text-sm last:border-b-0 hover:bg-slate-50 md:grid md:grid-cols-[44px_minmax(0,1fr)_120px_160px_auto] md:items-center md:gap-3 md:py-2"
+                  >
                     <div className="flex items-start gap-3 md:hidden">
                       <div className="pt-1">
                         {item.itemType === "file" ? (
