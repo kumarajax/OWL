@@ -153,6 +153,13 @@ const clientId = process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID ?? "owl-drive-web";
 const linkedInProfileUrl = "https://www.linkedin.com/in/ajaykumarpandit/";
 const defaultTelemetryRetentionRows = 100000;
 const maxTelemetryRetentionRows = 1000000;
+const defaultUploadChunkSizeBytes = 50 * 1024 * 1024;
+const cloudflareUploadLimitBytes = 100 * 1024 * 1024;
+const configuredUploadChunkSizeBytes = positiveIntegerOrDefault(
+  process.env.NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES,
+  defaultUploadChunkSizeBytes
+);
+const uploadChunkSizeBytes = Math.min(configuredUploadChunkSizeBytes, cloudflareUploadLimitBytes - 1024 * 1024);
 
 class AuthExpiredError extends Error {
   constructor() {
@@ -169,6 +176,11 @@ function base64Url(buffer: ArrayBuffer) {
 
 function rightRotate(value: number, amount: number) {
   return (value >>> amount) | (value << (32 - amount));
+}
+
+function positiveIntegerOrDefault(rawValue: string | undefined, fallback: number) {
+  const parsed = Number(rawValue);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function sha256Fallback(value: string) {
@@ -1041,10 +1053,16 @@ export default function Home() {
     return `${file.webkitRelativePath || file.name}::${file.size}::${file.lastModified}::${file.type}`;
   }
 
+  function isIgnoredUploadFile(file: File) {
+    const path = file.webkitRelativePath || file.name;
+    const segments = path.split("/");
+    return segments.some((segment) => segment === ".DS_Store" || segment === ".localized" || segment === "Thumbs.db");
+  }
+
   function mergePendingUploads(existing: File[], incoming: File[]) {
     const seen = new Set(existing.map(fileUploadKey));
     const merged = [...existing];
-    incoming.forEach((file) => {
+    incoming.filter((file) => !isIgnoredUploadFile(file)).forEach((file) => {
       const key = fileUploadKey(file);
       if (!seen.has(key)) {
         seen.add(key);
@@ -1507,16 +1525,11 @@ export default function Home() {
         for (let index = 0; index < filesToUpload.length; index += 1) {
           const file = filesToUpload[index];
           setUploadProgressLabel(`Uploading ${index + 1} of ${filesToUpload.length}: ${file.name}`);
-          const form = new FormData();
-          form.append("parentFolderId", currentFolder.id);
-          form.append("file", file);
-          form.append("relativePath", file.webkitRelativePath || file.name);
-          const response = await fetch(`${apiBaseUrl}/api/files/upload`, {
-            method: "POST",
-            headers: bearerHeaders,
-            body: form
-          });
-          await readJson(response);
+          if (file.size > uploadChunkSizeBytes) {
+            await uploadChunkedFile(file, filesToUpload.length, index);
+          } else {
+            await uploadSingleRequestFile(file);
+          }
           const nextQueue = pendingUploadsRef.current.filter((item) => fileUploadKey(item) !== fileUploadKey(file));
           setPendingUploadsAndRef(nextQueue);
           if (!currentFolder) return;
@@ -1536,6 +1549,61 @@ export default function Home() {
       uploadingRef.current = false;
       setUploading(false);
     }
+  }
+
+  async function uploadSingleRequestFile(file: File) {
+    if (!bearerHeaders || !currentFolder) return;
+    const form = new FormData();
+    form.append("parentFolderId", currentFolder.id);
+    form.append("file", file);
+    form.append("relativePath", file.webkitRelativePath || file.name);
+    const response = await fetch(`${apiBaseUrl}/api/files/upload`, {
+      method: "POST",
+      headers: bearerHeaders,
+      body: form
+    });
+    await readJson(response);
+  }
+
+  async function uploadChunkedFile(file: File, fileCount: number, fileIndex: number) {
+    if (!bearerHeaders || !currentFolder) return;
+    const uploadId = crypto.randomUUID();
+    const totalChunks = Math.ceil(file.size / uploadChunkSizeBytes);
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+      const start = chunkIndex * uploadChunkSizeBytes;
+      const end = Math.min(start + uploadChunkSizeBytes, file.size);
+      const chunk = file.slice(start, end);
+      setUploadProgressLabel(
+        `Uploading ${fileIndex + 1} of ${fileCount}: ${file.name} (${chunkIndex + 1} of ${totalChunks})`
+      );
+      const form = new FormData();
+      form.append("uploadId", uploadId);
+      form.append("chunkIndex", String(chunkIndex));
+      form.append("totalChunks", String(totalChunks));
+      form.append("totalSizeBytes", String(file.size));
+      form.append("chunk", chunk, `${file.name}.part${chunkIndex}`);
+      const response = await fetch(`${apiBaseUrl}/api/files/upload-chunk`, {
+        method: "POST",
+        headers: bearerHeaders,
+        body: form
+      });
+      if (!response.ok) await readJson(response);
+    }
+
+    const completeForm = new FormData();
+    completeForm.append("parentFolderId", currentFolder.id);
+    completeForm.append("uploadId", uploadId);
+    completeForm.append("fileName", file.name);
+    completeForm.append("relativePath", file.webkitRelativePath || file.name);
+    completeForm.append("contentType", file.type || "application/octet-stream");
+    completeForm.append("totalChunks", String(totalChunks));
+    completeForm.append("totalSizeBytes", String(file.size));
+    const completeResponse = await fetch(`${apiBaseUrl}/api/files/complete-chunked-upload`, {
+      method: "POST",
+      headers: bearerHeaders,
+      body: completeForm
+    });
+    await readJson(completeResponse);
   }
 
   async function addDraggedFiles(dataTransfer: DataTransfer) {

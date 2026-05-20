@@ -115,9 +115,11 @@ services:
       args:
         NEXT_PUBLIC_API_BASE_URL: http://localhost:8081
         NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:8080
+        NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES: ${NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES:-52428800}
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8081
       NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:8080
+      NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES: ${NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES:-52428800}
     ports:
       - "3000:3000"
     depends_on:

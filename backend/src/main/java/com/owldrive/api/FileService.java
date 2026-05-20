@@ -9,6 +9,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -16,6 +17,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -47,6 +49,7 @@ public class FileService {
     private final ObjectStorageService objectStorageService;
     private final long maxUploadBytes;
     private final boolean rejectEmptyFiles;
+    private final Path chunkUploadRoot;
 
     public FileService(
             JdbcTemplate jdbc,
@@ -54,8 +57,9 @@ public class FileService {
             ProvisioningService provisioningService,
             FolderService folderService,
             ObjectStorageService objectStorageService,
-            @Value("${app.storage.max-upload-bytes:1073741824}") long maxUploadBytes,
-            @Value("${app.storage.reject-empty-files:true}") boolean rejectEmptyFiles) {
+            @Value("${app.storage.max-upload-bytes:9223372036854775807}") long maxUploadBytes,
+            @Value("${app.storage.reject-empty-files:true}") boolean rejectEmptyFiles,
+            @Value("${app.storage.chunk-upload-root:${java.io.tmpdir}/owl-drive-uploads}") String chunkUploadRoot) {
         this.jdbc = jdbc;
         this.shardJdbcRegistry = shardJdbcRegistry;
         this.provisioningService = provisioningService;
@@ -63,6 +67,7 @@ public class FileService {
         this.objectStorageService = objectStorageService;
         this.maxUploadBytes = maxUploadBytes;
         this.rejectEmptyFiles = rejectEmptyFiles;
+        this.chunkUploadRoot = Path.of(chunkUploadRoot);
     }
 
     @Transactional
@@ -92,6 +97,60 @@ public class FileService {
             return overwriteExistingFile(user, existing, uploadPath.fileName(), upload);
         }
         return createNewFile(user, destinationFolder.id(), uploadPath.fileName(), upload);
+    }
+
+    public void uploadChunk(
+            Jwt jwt,
+            String uploadId,
+            int chunkIndex,
+            int totalChunks,
+            long totalSizeBytes,
+            MultipartFile chunk) {
+        UserRecord user = provisioningService.ensureUser(jwt);
+        validateChunkRequest(uploadId, chunkIndex, totalChunks, totalSizeBytes, chunk);
+        Path chunkPath = chunkPath(user.id(), uploadId, chunkIndex);
+        try {
+            Files.createDirectories(chunkPath.getParent());
+            Files.deleteIfExists(chunkPath);
+            chunk.transferTo(chunkPath);
+        } catch (IOException ex) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to store upload chunk", ex);
+        }
+    }
+
+    @Transactional
+    public FileRecord completeChunkedUpload(
+            Jwt jwt,
+            UUID parentFolderId,
+            String uploadId,
+            String fileName,
+            String relativePath,
+            String contentType,
+            int totalChunks,
+            long totalSizeBytes) {
+        UserRecord user = provisioningService.ensureUser(jwt);
+        if (parentFolderId == null) {
+            throw badRequest("parentFolderId is required");
+        }
+        folderService.requireOwnedActiveFolder(user, parentFolderId);
+        validateCompleteChunkedRequest(uploadId, fileName, totalChunks, totalSizeBytes);
+
+        UploadPath uploadPath = parseUploadPath(relativePath, fileName);
+        FolderRecord destinationFolder = folderService.resolveOrCreateFolderPath(user, parentFolderId, uploadPath.folderSegments());
+        Path uploadDir = uploadDir(user.id(), uploadId);
+        Path assembledFile = uploadDir.resolve("assembled");
+        try {
+            assembleChunks(uploadDir, assembledFile, totalChunks, totalSizeBytes);
+            FileRecord existing = findActiveFileByName(currentJdbc(), user.id(), destinationFolder.id(), uploadPath.fileName());
+            if (existing != null) {
+                return overwriteExistingFile(user, existing, uploadPath.fileName(), assembledFile, totalSizeBytes, contentType);
+            }
+            return createNewFile(user, destinationFolder.id(), uploadPath.fileName(), assembledFile, totalSizeBytes, contentType);
+        } catch (IOException ex) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to assemble upload", ex);
+        } finally {
+            deleteDirectoryQuietly(uploadDir);
+        }
     }
 
     @Transactional(readOnly = true)
@@ -202,6 +261,32 @@ public class FileService {
         }
     }
 
+    private FileRecord createNewFile(UserRecord user, UUID parentFolderId, String originalName, Path path, long sizeBytes, String contentType) {
+        UUID fileId = UUID.randomUUID();
+        StoredFile storedFile;
+        try {
+            storedFile = objectStorageService.storeFile(user.id(), fileId, path, sizeBytes, contentType);
+        } catch (IOException ex) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to store file", ex);
+        }
+
+        try {
+            reserveUserStorage(user, storedFile.sizeBytes());
+            return insertFileRecord(user, parentFolderId, fileId, originalName, contentType, storedFile);
+        } catch (DataIntegrityViolationException ex) {
+            FileRecord existing = findActiveFileByName(currentJdbc(), user.id(), parentFolderId, originalName);
+            if (existing != null) {
+                adjustUserStorage(user, -existing.sizeBytes());
+                return overwriteStoredBytes(user, existing, originalName, contentType, storedFile);
+            }
+            deleteStoredBytesQuietly(storedFile);
+            throw badRequest("A file with this name already exists here");
+        } catch (ResponseStatusException ex) {
+            deleteStoredBytesQuietly(storedFile);
+            throw ex;
+        }
+    }
+
     private FileRecord overwriteExistingFile(UserRecord user, FileRecord existingFile, String originalName, MultipartFile upload) {
         UUID fileId = UUID.randomUUID();
         StoredFile storedFile;
@@ -219,7 +304,28 @@ public class FileService {
         }
     }
 
+    private FileRecord overwriteExistingFile(UserRecord user, FileRecord existingFile, String originalName, Path path, long sizeBytes, String contentType) {
+        UUID fileId = UUID.randomUUID();
+        StoredFile storedFile;
+        try {
+            storedFile = objectStorageService.storeFile(user.id(), fileId, path, sizeBytes, contentType);
+        } catch (IOException ex) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to store file", ex);
+        }
+        try {
+            adjustUserStorage(user, storedFile.sizeBytes() - existingFile.sizeBytes());
+            return overwriteStoredBytes(user, existingFile, originalName, contentType, storedFile);
+        } catch (ResponseStatusException ex) {
+            deleteStoredBytesQuietly(storedFile);
+            throw ex;
+        }
+    }
+
     private FileRecord overwriteStoredBytes(UserRecord user, FileRecord existingFile, String originalName, MultipartFile upload, StoredFile storedFile) {
+        return overwriteStoredBytes(user, existingFile, originalName, contentType(upload), storedFile);
+    }
+
+    private FileRecord overwriteStoredBytes(UserRecord user, FileRecord existingFile, String originalName, String contentType, StoredFile storedFile) {
         JdbcTemplate shardJdbc = currentJdbc();
         try {
             FileRecord updated = shardJdbc.queryForObject(
@@ -235,7 +341,7 @@ public class FileService {
                     this::mapFile,
                     storedFile.storagePool(),
                     storedFile.storageKey(),
-                    contentType(upload),
+                    normalizeContentType(contentType),
                     storedFile.sizeBytes(),
                     storedFile.checksumSha256(),
                     originalName,
@@ -253,6 +359,10 @@ public class FileService {
     }
 
     private FileRecord insertFileRecord(UserRecord user, UUID parentFolderId, UUID fileId, String originalName, MultipartFile upload, StoredFile storedFile) {
+        return insertFileRecord(user, parentFolderId, fileId, originalName, contentType(upload), storedFile);
+    }
+
+    private FileRecord insertFileRecord(UserRecord user, UUID parentFolderId, UUID fileId, String originalName, String contentType, StoredFile storedFile) {
         JdbcTemplate shardJdbc = currentJdbc();
         try {
             return shardJdbc.queryForObject(
@@ -273,7 +383,7 @@ public class FileService {
                     originalName,
                     storedFile.storagePool(),
                     storedFile.storageKey(),
-                    contentType(upload),
+                    normalizeContentType(contentType),
                     storedFile.sizeBytes(),
                     storedFile.checksumSha256());
         } catch (DataIntegrityViolationException ex) {
@@ -568,6 +678,100 @@ public class FileService {
         sanitizeDisplayName(upload.getOriginalFilename());
     }
 
+    private void validateChunkRequest(String uploadId, int chunkIndex, int totalChunks, long totalSizeBytes, MultipartFile chunk) {
+        validateUploadId(uploadId);
+        validateChunkCounts(totalChunks, totalSizeBytes);
+        if (chunkIndex < 0 || chunkIndex >= totalChunks) {
+            throw badRequest("chunkIndex is out of range");
+        }
+        if (chunk == null || chunk.isEmpty()) {
+            throw badRequest("chunk is required");
+        }
+        if (chunk.getSize() > maxUploadBytes) {
+            throw badRequest("Chunk exceeds max upload size");
+        }
+    }
+
+    private void validateCompleteChunkedRequest(String uploadId, String fileName, int totalChunks, long totalSizeBytes) {
+        validateUploadId(uploadId);
+        validateChunkCounts(totalChunks, totalSizeBytes);
+        sanitizeDisplayName(fileName);
+    }
+
+    private void validateUploadId(String uploadId) {
+        if (uploadId == null || uploadId.isBlank()) {
+            throw badRequest("uploadId is required");
+        }
+        try {
+            UUID.fromString(uploadId);
+        } catch (IllegalArgumentException ex) {
+            throw badRequest("uploadId must be a UUID string");
+        }
+    }
+
+    private void validateChunkCounts(int totalChunks, long totalSizeBytes) {
+        if (totalChunks <= 0) {
+            throw badRequest("totalChunks must be positive");
+        }
+        if (totalSizeBytes <= 0) {
+            throw badRequest("totalSizeBytes must be positive");
+        }
+        if (totalSizeBytes > maxUploadBytes) {
+            throw badRequest("File exceeds max upload size");
+        }
+    }
+
+    private void assembleChunks(Path uploadDir, Path assembledFile, int totalChunks, long totalSizeBytes) throws IOException {
+        Files.createDirectories(uploadDir);
+        long assembledBytes = 0;
+        try (OutputStream output = Files.newOutputStream(assembledFile)) {
+            for (int index = 0; index < totalChunks; index += 1) {
+                Path part = uploadDir.resolve(chunkFileName(index));
+                if (!Files.isRegularFile(part)) {
+                    throw badRequest("Missing upload chunk " + index);
+                }
+                assembledBytes += Files.size(part);
+                try (InputStream input = Files.newInputStream(part)) {
+                    input.transferTo(output);
+                }
+            }
+        }
+        if (assembledBytes != totalSizeBytes) {
+            throw badRequest("Assembled upload size does not match expected size");
+        }
+    }
+
+    private Path chunkPath(UUID userId, String uploadId, int chunkIndex) {
+        return uploadDir(userId, uploadId).resolve(chunkFileName(chunkIndex));
+    }
+
+    private Path uploadDir(UUID userId, String uploadId) {
+        return chunkUploadRoot.resolve(userId.toString()).resolve(uploadId).normalize();
+    }
+
+    private String chunkFileName(int chunkIndex) {
+        return String.format("%08d.part", chunkIndex);
+    }
+
+    private void deleteDirectoryQuietly(Path directory) {
+        try {
+            if (!Files.exists(directory)) {
+                return;
+            }
+            try (var paths = Files.walk(directory)) {
+                paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                    try {
+                        Files.deleteIfExists(path);
+                    } catch (IOException ex) {
+                        log.warn("Unable to delete upload temp path {}", path, ex);
+                    }
+                });
+            }
+        } catch (IOException ex) {
+            log.warn("Unable to clean upload temp directory {}", directory, ex);
+        }
+    }
+
     private String sanitizeDisplayName(String rawName) {
         String name = rawName == null ? "download" : rawName.replace("\\", "/");
         int slash = name.lastIndexOf('/');
@@ -609,7 +813,10 @@ public class FileService {
     }
 
     private String contentType(MultipartFile upload) {
-        String contentType = upload.getContentType();
+        return normalizeContentType(upload.getContentType());
+    }
+
+    private String normalizeContentType(String contentType) {
         return contentType == null || contentType.isBlank() ? "application/octet-stream" : contentType;
     }
 
