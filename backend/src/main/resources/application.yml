@@ -28,5 +28,5 @@ app:
         allowed-issuers: ${APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUERS:}
         allowed-issuer-patterns: ${APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUER_PATTERNS:http://localhost:8080/realms/owldrive,http://127.0.0.1:8080/realms/owldrive,http://192.168.*.*:8080/realms/owldrive,http://10.*.*.*:8080/realms/owldrive,http://172.*.*.*:8080/realms/owldrive}
   storage:
-    max-upload-bytes: ${APP_STORAGE_MAX_UPLOAD_BYTES:1073741824}
+    max-upload-bytes: ${APP_STORAGE_MAX_UPLOAD_BYTES:9223372036854775807}
     reject-empty-files: true

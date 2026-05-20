@@ -68,6 +68,7 @@ KEYCLOAK_URL="$(normalize_url "$3")"
 
 python3 - "$COMPOSE_FILE" "$DOCKERFILE" "$FRONTEND_ENV_FILE" "$FRONTEND_URL" "$BACKEND_URL" "$KEYCLOAK_URL" <<'PY'
 from pathlib import Path
+import os
 import re
 import sys
 from urllib.parse import urlparse
@@ -78,6 +79,7 @@ frontend_env_path = Path(sys.argv[3])
 frontend_url = sys.argv[4]
 backend_url = sys.argv[5]
 keycloak_url = sys.argv[6]
+upload_chunk_size = os.environ.get("NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES", "52428800")
 
 for label, value in [
     ("frontend", frontend_url),
@@ -182,7 +184,8 @@ if "      args:\n" not in frontend_block:
         "    build:\n      context: ./frontend\n"
         "      args:\n"
         f"        NEXT_PUBLIC_API_BASE_URL: {backend_url}\n"
-        f"        NEXT_PUBLIC_KEYCLOAK_URL: {keycloak_url}\n",
+        f"        NEXT_PUBLIC_KEYCLOAK_URL: {keycloak_url}\n"
+        f"        NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES: {upload_chunk_size}\n",
     )
 else:
     if "        NEXT_PUBLIC_API_BASE_URL:" in frontend_block:
@@ -211,14 +214,22 @@ else:
             "      args:\n"
             f"        NEXT_PUBLIC_KEYCLOAK_URL: {keycloak_url}\n",
         )
+    if "        NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES:" not in frontend_block:
+        frontend_block = frontend_block.replace(
+            "      args:\n",
+            "      args:\n"
+            "        NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES: ${NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES:-52428800}\n",
+        )
 
 compose = compose[: match.start()] + frontend_block + compose[match.end() :]
 
 required_dockerfile_block = (
     "ARG NEXT_PUBLIC_API_BASE_URL\n"
     "ARG NEXT_PUBLIC_KEYCLOAK_URL\n"
+    "ARG NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES\n"
     "ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL\n"
     "ENV NEXT_PUBLIC_KEYCLOAK_URL=$NEXT_PUBLIC_KEYCLOAK_URL\n"
+    "ENV NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES=$NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES\n"
 )
 if "ARG NEXT_PUBLIC_API_BASE_URL" not in dockerfile:
     dockerfile = dockerfile.replace(
@@ -232,6 +243,7 @@ else:
 
 frontend_env = replace_env_key(frontend_env, "NEXT_PUBLIC_API_BASE_URL", backend_url)
 frontend_env = replace_env_key(frontend_env, "NEXT_PUBLIC_KEYCLOAK_URL", keycloak_url)
+frontend_env = replace_env_key(frontend_env, "NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES", upload_chunk_size)
 
 compose_path.write_text(compose, encoding="utf-8")
 dockerfile_path.write_text(dockerfile, encoding="utf-8")

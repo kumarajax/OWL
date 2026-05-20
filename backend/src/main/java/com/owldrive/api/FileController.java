@@ -39,6 +39,32 @@ public class FileController {
         return fileService.upload(jwt, parentFolderId, files, relativePath);
     }
 
+    @PostMapping("/upload-chunk")
+    ResponseEntity<Void> uploadChunk(
+            @AuthenticationPrincipal Jwt jwt,
+            @RequestParam("uploadId") String uploadId,
+            @RequestParam("chunkIndex") int chunkIndex,
+            @RequestParam("totalChunks") int totalChunks,
+            @RequestParam("totalSizeBytes") long totalSizeBytes,
+            @RequestParam("chunk") MultipartFile chunk) {
+        fileService.uploadChunk(jwt, uploadId, chunkIndex, totalChunks, totalSizeBytes, chunk);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/complete-chunked-upload")
+    FileRecord completeChunkedUpload(
+            @AuthenticationPrincipal Jwt jwt,
+            @RequestParam("parentFolderId") UUID parentFolderId,
+            @RequestParam("uploadId") String uploadId,
+            @RequestParam("fileName") String fileName,
+            @RequestParam(value = "relativePath", required = false) String relativePath,
+            @RequestParam(value = "contentType", required = false) String contentType,
+            @RequestParam("totalChunks") int totalChunks,
+            @RequestParam("totalSizeBytes") long totalSizeBytes) {
+        return fileService.completeChunkedUpload(
+                jwt, parentFolderId, uploadId, fileName, relativePath, contentType, totalChunks, totalSizeBytes);
+    }
+
     @GetMapping("/{fileId}/download")
     ResponseEntity<InputStreamResource> download(
             @AuthenticationPrincipal Jwt jwt,

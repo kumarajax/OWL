@@ -14,6 +14,8 @@ import io.minio.messages.Item;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -60,25 +62,30 @@ public class MultiPoolMinioObjectStorageService implements ObjectStorageService 
 
     @Override
     public StoredFile store(UUID ownerId, UUID fileId, MultipartFile upload) throws IOException {
+        return storeStream(ownerId, fileId, upload::getInputStream, upload.getSize(), upload.getContentType());
+    }
+
+    @Override
+    public StoredFile storeFile(UUID ownerId, UUID fileId, Path path, long sizeBytes, String contentType) throws IOException {
+        return storeStream(ownerId, fileId, () -> Files.newInputStream(path), sizeBytes, contentType);
+    }
+
+    private StoredFile storeStream(UUID ownerId, UUID fileId, InputStreamSupplier sourceSupplier, long sizeBytes, String contentType) throws IOException {
         IOException lastError = null;
         for (Pool pool : pools) {
             MessageDigest digest = sha256Digest();
-            try {
+            try (InputStream input = new DigestInputStream(sourceSupplier.get(), digest)) {
                 ensureBucket(pool);
                 String storageKey = storageKey(ownerId, fileId);
-                long bytes;
-                try (InputStream input = new DigestInputStream(upload.getInputStream(), digest)) {
-                    PutObjectArgs.Builder builder = PutObjectArgs.builder()
-                            .bucket(pool.bucket)
-                            .object(storageKey)
-                            .stream(input, upload.getSize(), UPLOAD_PART_SIZE);
-                    if (upload.getContentType() != null && !upload.getContentType().isBlank()) {
-                        builder.contentType(upload.getContentType());
-                    }
-                    pool.client.putObject(builder.build());
-                    bytes = upload.getSize();
+                PutObjectArgs.Builder builder = PutObjectArgs.builder()
+                        .bucket(pool.bucket)
+                        .object(storageKey)
+                        .stream(input, sizeBytes, UPLOAD_PART_SIZE);
+                if (contentType != null && !contentType.isBlank()) {
+                    builder.contentType(contentType);
                 }
-                return new StoredFile(pool.name, storageKey, HexFormat.of().formatHex(digest.digest()), bytes);
+                pool.client.putObject(builder.build());
+                return new StoredFile(pool.name, storageKey, HexFormat.of().formatHex(digest.digest()), sizeBytes);
             } catch (IOException ex) {
                 lastError = ex;
             } catch (Exception ex) {
@@ -252,5 +259,10 @@ public class MultiPoolMinioObjectStorageService implements ObjectStorageService 
                     .credentials(accessKey, secretKey)
                     .build();
         }
+    }
+
+    @FunctionalInterface
+    private interface InputStreamSupplier {
+        InputStream get() throws IOException;
     }
 }

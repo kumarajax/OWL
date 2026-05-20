@@ -355,9 +355,11 @@ EOF
       args:
         NEXT_PUBLIC_API_BASE_URL: https://api.owl-drive.com
         NEXT_PUBLIC_KEYCLOAK_URL: https://auth.owl-drive.com
+        NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES: \${NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES:-52428800}
     environment:
       NEXT_PUBLIC_API_BASE_URL: https://api.owl-drive.com
       NEXT_PUBLIC_KEYCLOAK_URL: https://auth.owl-drive.com
+      NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES: \${NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES:-52428800}
     ports:
       - "3000:3000"
     depends_on:
