@@ -15,7 +15,9 @@ import {
   HardDrive,
   Image as ImageIcon,
   KeyRound,
+  LayoutGrid,
   Linkedin,
+  List,
   LogOut,
   Move,
   Pause,
@@ -120,6 +122,7 @@ type AccessLog = {
 
 type AccessLogSortKey = "createdAt" | "displayName" | "email" | "ipAddress" | "location" | "method" | "path" | "statusCode" | "durationMs" | "eventType";
 type DriveSortKey = "name" | "size" | "updatedAt";
+type DriveViewMode = "list" | "large-icons";
 
 type TelemetryRetention = {
   maxRetentionRows: number;
@@ -584,6 +587,7 @@ export default function Home() {
   const [accessLogSortDirection, setAccessLogSortDirection] = useState<"asc" | "desc">("desc");
   const [driveSortKey, setDriveSortKey] = useState<DriveSortKey>("name");
   const [driveSortDirection, setDriveSortDirection] = useState<"asc" | "desc">("asc");
+  const [driveViewMode, setDriveViewMode] = useState<DriveViewMode>("list");
   const [pendingUploads, setPendingUploads] = useState<File[]>([]);
   const [uploadProgressLabel, setUploadProgressLabel] = useState("");
   const [dragActive, setDragActive] = useState(false);
@@ -3022,6 +3026,32 @@ export default function Home() {
               </div>
 
               <div className="flex items-center gap-2">
+                <div className="inline-flex rounded-md border border-slate-300 bg-white p-1" aria-label="File view mode">
+                  <button
+                    type="button"
+                    onClick={() => setDriveViewMode("list")}
+                    className={`inline-flex h-8 items-center gap-2 rounded px-3 text-sm font-semibold ${
+                      driveViewMode === "list" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
+                    }`}
+                    title="List view"
+                    aria-pressed={driveViewMode === "list"}
+                  >
+                    <List className="h-4 w-4" />
+                    List
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDriveViewMode("large-icons")}
+                    className={`inline-flex h-8 items-center gap-2 rounded px-3 text-sm font-semibold ${
+                      driveViewMode === "large-icons" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
+                    }`}
+                    title="Large icon view"
+                    aria-pressed={driveViewMode === "large-icons"}
+                  >
+                    <LayoutGrid className="h-4 w-4" />
+                    Icons
+                  </button>
+                </div>
                 <button
                   onClick={refreshCurrentFolder}
                   disabled={loading || uploading}
@@ -3162,69 +3192,156 @@ export default function Home() {
             ) : null}
 
             <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-              <div className="hidden grid-cols-[44px_minmax(0,1fr)_120px_160px_auto] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-600 md:grid">
-                <div className="flex items-center justify-center">
-                  <input
-                    type="checkbox"
-                    checked={allVisibleFilesSelected}
-                    onChange={toggleAllFiles}
-                    disabled={visibleFileIds.length === 0}
-                    aria-label="Select all files"
-                    className="h-4 w-4"
-                  />
-                </div>
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => sortDriveItems("name")}
-                    className="inline-flex items-center gap-1 hover:text-blue-700"
-                  >
-                    Name
-                    <span className="text-slate-400">
-                      {driveSortKey === "name" ? (driveSortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />) : ""}
-                    </span>
-                  </button>
-                </div>
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => sortDriveItems("size")}
-                    className="inline-flex items-center gap-1 hover:text-blue-700"
-                  >
-                    Size
-                    <span className="text-slate-400">
-                      {driveSortKey === "size" ? (driveSortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />) : ""}
-                    </span>
-                  </button>
-                </div>
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => sortDriveItems("updatedAt")}
-                    className="inline-flex items-center gap-1 hover:text-blue-700"
-                  >
-                    Modified
-                    <span className="text-slate-400">
-                      {driveSortKey === "updatedAt" ? (driveSortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />) : ""}
-                    </span>
-                  </button>
-                </div>
-                <div>Actions</div>
-              </div>
-              {children.length === 0 ? (
+              {driveViewMode === "list" ? (
+                <>
+                  <div className="hidden grid-cols-[44px_minmax(0,1fr)_120px_160px_auto] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-600 md:grid">
+                    <div className="flex items-center justify-center">
+                      <input
+                        type="checkbox"
+                        checked={allVisibleFilesSelected}
+                        onChange={toggleAllFiles}
+                        disabled={visibleFileIds.length === 0}
+                        aria-label="Select all files"
+                        className="h-4 w-4"
+                      />
+                    </div>
+                    <div>
+                      <button type="button" onClick={() => sortDriveItems("name")} className="inline-flex items-center gap-1 hover:text-blue-700">
+                        Name
+                        <span className="text-slate-400">
+                          {driveSortKey === "name" ? (driveSortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />) : ""}
+                        </span>
+                      </button>
+                    </div>
+                    <div>
+                      <button type="button" onClick={() => sortDriveItems("size")} className="inline-flex items-center gap-1 hover:text-blue-700">
+                        Size
+                        <span className="text-slate-400">
+                          {driveSortKey === "size" ? (driveSortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />) : ""}
+                        </span>
+                      </button>
+                    </div>
+                    <div>
+                      <button type="button" onClick={() => sortDriveItems("updatedAt")} className="inline-flex items-center gap-1 hover:text-blue-700">
+                        Modified
+                        <span className="text-slate-400">
+                          {driveSortKey === "updatedAt" ? (driveSortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />) : ""}
+                        </span>
+                      </button>
+                    </div>
+                    <div>Actions</div>
+                  </div>
+                  {children.length === 0 ? (
+                    <div className="px-4 py-12 text-center text-slate-500">{loading || uploading ? "Loading..." : "No files or folders"}</div>
+                  ) : (
+                    sortedChildren.map((item) => (
+                      <div
+                        key={`${item.itemType}-${item.id}`}
+                        onDoubleClick={(event) => {
+                          if (isInteractiveDoubleClickTarget(event.target)) return;
+                          void handleItemDoubleClick(item);
+                        }}
+                        className="cursor-pointer border-b border-slate-100 px-4 py-3 text-sm last:border-b-0 hover:bg-slate-50 md:grid md:grid-cols-[44px_minmax(0,1fr)_120px_160px_auto] md:items-center md:gap-3 md:py-2"
+                      >
+                        <div className="flex items-start gap-3 md:hidden">
+                          <div className="pt-1">
+                            {item.itemType === "file" ? (
+                              <input
+                                type="checkbox"
+                                checked={selectedFileIds.has(item.id)}
+                                onChange={() => toggleFileSelection(item.id)}
+                                aria-label={`Select ${item.name}`}
+                                className="h-4 w-4"
+                              />
+                            ) : (
+                              <div className="h-4 w-4" />
+                            )}
+                          </div>
+                          {item.itemType === "folder" ? <Folder className="mt-1 h-5 w-5 shrink-0 text-blue-600" /> : <FileText className="mt-1 h-5 w-5 shrink-0 text-slate-400" />}
+                          <div className="min-w-0 flex-1">
+                            <button
+                              onClick={item.itemType === "folder" ? () => openFolder(itemToFolder(item)) : undefined}
+                              className="flex min-w-0 items-center rounded-md py-1 text-left"
+                            >
+                              <span className="truncate font-medium">{item.name}</span>
+                            </button>
+                            {item.itemType === "file" ? <div className="mt-1 truncate text-xs text-slate-500">{item.contentType || "application/octet-stream"}</div> : null}
+                            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+                              <span>{item.itemType === "file" ? formatBytes(item.sizeBytes) : "Folder"}</span>
+                              <span>{formatDate(item.updatedAt)}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="hidden md:flex md:items-center md:justify-center">
+                          {item.itemType === "file" ? (
+                            <input
+                              type="checkbox"
+                              checked={selectedFileIds.has(item.id)}
+                              onChange={() => toggleFileSelection(item.id)}
+                              aria-label={`Select ${item.name}`}
+                              className="h-4 w-4"
+                            />
+                          ) : null}
+                        </div>
+                        {item.itemType === "folder" ? (
+                          <button onClick={() => openFolder(itemToFolder(item))} className="hidden min-w-0 items-center gap-3 rounded-md py-2 text-left md:flex">
+                            <Folder className="h-5 w-5 shrink-0 text-blue-600" />
+                            <span className="truncate font-medium">{item.name}</span>
+                          </button>
+                        ) : (
+                          <div className="hidden min-w-0 items-center gap-3 py-2 md:flex">
+                            <FileText className="h-5 w-5 shrink-0 text-slate-400" />
+                            <div className="min-w-0">
+                              <div className="truncate font-medium">{item.name}</div>
+                              <div className="truncate text-xs text-slate-500">{item.contentType || "application/octet-stream"}</div>
+                            </div>
+                          </div>
+                        )}
+                        <div className="hidden text-slate-600 md:block">{item.itemType === "file" ? formatBytes(item.sizeBytes) : ""}</div>
+                        <div className="hidden truncate text-slate-600 md:block">{formatDate(item.updatedAt)}</div>
+                        <div className="mt-2 flex items-center gap-1 md:mt-0 md:justify-end">
+                          {item.itemType === "folder" ? (
+                            <>
+                              <button onClick={() => renameFolder(itemToFolder(item))} className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-transparent hover:border-slate-200 hover:bg-white" title="Rename">
+                                <Pencil className="h-4 w-4" />
+                              </button>
+                              <button onClick={() => deleteFolder(itemToFolder(item))} className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-transparent text-red-600 hover:border-red-200 hover:bg-red-50" title="Delete">
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button onClick={() => shareFile(item)} className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-transparent hover:border-slate-200 hover:bg-white" title="Share public link">
+                                <Share2 className="h-4 w-4" />
+                              </button>
+                              <button onClick={() => downloadFile(item)} className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-transparent hover:border-slate-200 hover:bg-white" title="Download">
+                                <Download className="h-4 w-4" />
+                              </button>
+                              <button onClick={() => deleteFile(item)} className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-transparent text-red-600 hover:border-red-200 hover:bg-red-50" title="Delete">
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </>
+              ) : children.length === 0 ? (
                 <div className="px-4 py-12 text-center text-slate-500">{loading || uploading ? "Loading..." : "No files or folders"}</div>
               ) : (
-                sortedChildren.map((item) => (
-                  <div
-                    key={`${item.itemType}-${item.id}`}
-                    onDoubleClick={(event) => {
-                      if (isInteractiveDoubleClickTarget(event.target)) return;
-                      void handleItemDoubleClick(item);
-                    }}
-                    className="cursor-pointer border-b border-slate-100 px-4 py-3 text-sm last:border-b-0 hover:bg-slate-50 md:grid md:grid-cols-[44px_minmax(0,1fr)_120px_160px_auto] md:items-center md:gap-3 md:py-2"
-                  >
-                    <div className="flex items-start gap-3 md:hidden">
-                      <div className="pt-1">
+                <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+                  {sortedChildren.map((item) => (
+                    <div
+                      key={`${item.itemType}-${item.id}`}
+                      onDoubleClick={(event) => {
+                        if (isInteractiveDoubleClickTarget(event.target)) return;
+                        void handleItemDoubleClick(item);
+                      }}
+                      className="group cursor-pointer rounded-md border border-slate-200 bg-white p-3 text-sm hover:border-blue-200 hover:bg-blue-50/40"
+                    >
+                      <div className="mb-3 flex items-center justify-between gap-2">
                         {item.itemType === "file" ? (
                           <input
                             type="checkbox"
@@ -3234,121 +3351,52 @@ export default function Home() {
                             className="h-4 w-4"
                           />
                         ) : (
-                          <div className="h-4 w-4" />
+                          <span />
+                        )}
+                        <div className="flex items-center gap-1 opacity-100 md:opacity-0 md:transition group-hover:opacity-100">
+                          {item.itemType === "folder" ? (
+                            <>
+                              <button onClick={() => renameFolder(itemToFolder(item))} className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-white" title="Rename">
+                                <Pencil className="h-4 w-4" />
+                              </button>
+                              <button onClick={() => deleteFolder(itemToFolder(item))} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-red-600 hover:bg-red-50" title="Delete">
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button onClick={() => shareFile(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-white" title="Share public link">
+                                <Share2 className="h-4 w-4" />
+                              </button>
+                              <button onClick={() => downloadFile(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-white" title="Download">
+                                <Download className="h-4 w-4" />
+                              </button>
+                              <button onClick={() => deleteFile(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-red-600 hover:bg-red-50" title="Delete">
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div className="mb-3 flex aspect-square items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                        {item.itemType === "folder" ? (
+                          <button onClick={() => openFolder(itemToFolder(item))} className="flex h-full w-full items-center justify-center">
+                            <Folder className="h-16 w-16 text-blue-600" />
+                          </button>
+                        ) : mediaKindForItem(item) ? (
+                          <MediaThumbnailPreview item={item} apiBaseUrl={apiBaseUrl} bearerHeaders={bearerHeaders} />
+                        ) : (
+                          <FileText className="h-16 w-16 text-slate-400" />
                         )}
                       </div>
-                      {item.itemType === "file" ? (
-                        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-100">
-                          {mediaKindForItem(item) ? (
-                            <MediaThumbnailPreview item={item} apiBaseUrl={apiBaseUrl} bearerHeaders={bearerHeaders} />
-                          ) : (
-                            <div className="flex h-full w-full items-center justify-center text-slate-400">
-                              <FileText className="h-5 w-5" />
-                            </div>
-                          )}
-                        </div>
-                      ) : null}
-                      <div className="min-w-0 flex-1">
-                        <button
-                          onClick={item.itemType === "folder" ? () => openFolder(itemToFolder(item)) : undefined}
-                          className={`flex min-w-0 items-center text-left ${item.itemType === "folder" ? "gap-3 rounded-md py-1" : "py-1"}`}
-                        >
-                          {item.itemType === "folder" ? (
-                            <Folder className="h-5 w-5 shrink-0 text-blue-600" />
-                          ) : null}
-                          <span className="truncate font-medium">{item.name}</span>
-                        </button>
-                        {item.itemType === "file" ? (
-                          <div className="mt-1 truncate text-xs text-slate-500">{item.contentType || "application/octet-stream"}</div>
-                        ) : null}
-                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
-                          <span>{item.itemType === "file" ? formatBytes(item.sizeBytes) : "Folder"}</span>
-                          <span>{formatDate(item.updatedAt)}</span>
-                        </div>
+                      <div className="truncate font-medium" title={item.name}>
+                        {item.name}
                       </div>
+                      <div className="mt-1 truncate text-xs text-slate-500">{item.itemType === "file" ? formatBytes(item.sizeBytes) || item.contentType || "File" : "Folder"}</div>
+                      <div className="mt-1 truncate text-xs text-slate-500">{formatDate(item.updatedAt)}</div>
                     </div>
-
-                    <div className="hidden md:flex md:items-center md:justify-center">
-                      {item.itemType === "file" ? (
-                        <input
-                          type="checkbox"
-                          checked={selectedFileIds.has(item.id)}
-                          onChange={() => toggleFileSelection(item.id)}
-                          aria-label={`Select ${item.name}`}
-                          className="h-4 w-4"
-                        />
-                      ) : null}
-                    </div>
-                    {item.itemType === "folder" ? (
-                      <button onClick={() => openFolder(itemToFolder(item))} className="hidden min-w-0 items-center gap-3 rounded-md py-2 text-left md:flex">
-                        <Folder className="h-5 w-5 shrink-0 text-blue-600" />
-                        <span className="truncate font-medium">{item.name}</span>
-                      </button>
-                    ) : (
-                      <div className="hidden min-w-0 items-center gap-3 py-2 md:flex">
-                        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-100">
-                          {mediaKindForItem(item) ? (
-                            <MediaThumbnailPreview item={item} apiBaseUrl={apiBaseUrl} bearerHeaders={bearerHeaders} />
-                          ) : (
-                            <div className="flex h-full w-full items-center justify-center text-slate-400">
-                              <FileText className="h-5 w-5" />
-                            </div>
-                          )}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="truncate font-medium">{item.name}</div>
-                          <div className="truncate text-xs text-slate-500">{item.contentType || "application/octet-stream"}</div>
-                        </div>
-                      </div>
-                    )}
-                    <div className="hidden text-slate-600 md:block">{item.itemType === "file" ? formatBytes(item.sizeBytes) : ""}</div>
-                    <div className="hidden truncate text-slate-600 md:block">{formatDate(item.updatedAt)}</div>
-                    <div className="mt-2 flex items-center gap-1 md:mt-0 md:justify-end">
-                      {item.itemType === "folder" ? (
-                        <>
-                          <button
-                            onClick={() => renameFolder(itemToFolder(item))}
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-transparent hover:border-slate-200 hover:bg-white"
-                            title="Rename"
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => deleteFolder(itemToFolder(item))}
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-transparent text-red-600 hover:border-red-200 hover:bg-red-50"
-                            title="Delete"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            onClick={() => shareFile(item)}
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-transparent hover:border-slate-200 hover:bg-white"
-                            title="Share public link"
-                          >
-                            <Share2 className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => downloadFile(item)}
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-transparent hover:border-slate-200 hover:bg-white"
-                            title="Download"
-                          >
-                            <Download className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => deleteFile(item)}
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-transparent text-red-600 hover:border-red-200 hover:bg-red-50"
-                            title="Delete"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                ))
+                  ))}
+                </div>
               )}
             </div>
               </div>
