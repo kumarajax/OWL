@@ -2438,110 +2438,116 @@ export default function Home() {
       ) : null}
 
       {!token ? (
-        <section className="mx-auto max-w-3xl px-6 py-12">
-          <div className="rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
-            <h1 className="text-2xl font-semibold">OWL Drive</h1>
-            <form className="mt-6 space-y-4" onSubmit={loginWithPassword}>
-              <div>
-                <label className="block text-sm font-medium text-slate-700" htmlFor="owl-username">
-                  Username
-                </label>
-                <input
-                  id="owl-username"
-                  value={loginUsername}
-                  onChange={(event) => setLoginUsername(event.target.value)}
-                  className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  autoComplete="username"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700" htmlFor="owl-password">
-                  Password
-                </label>
-                <input
-                  id="owl-password"
-                  type="password"
-                  value={loginPassword}
-                  onChange={(event) => setLoginPassword(event.target.value)}
-                  className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  autoComplete="current-password"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={loginSubmitting || loading}
-                className="inline-flex h-11 w-full items-center justify-center rounded-md bg-blue-600 px-5 font-semibold text-white disabled:opacity-50"
-              >
-                {loginSubmitting ? "Logging in" : "Login"}
-              </button>
-            </form>
-            {registrationFull ? (
-              <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">Max usage reached.</p>
-            ) : authMode === "register" ? (
-              <form className="mt-4 space-y-3 rounded-md border border-slate-200 bg-slate-50 p-4" onSubmit={submitRegistrationCaptcha}>
+        <section className="mx-auto max-w-5xl px-6 py-12">
+          <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm md:grid md:grid-cols-[minmax(0,0.7fr)_420px]">
+            <div className="min-h-64 bg-slate-100 md:min-h-full">
+              <img src="/images/owl-drive-login.jpg" alt="OWL Drive file storage" className="h-full w-full object-cover" />
+            </div>
+            <div className="p-8">
+              <h1 className="text-2xl font-semibold">OWL Drive</h1>
+              <p className="mt-2 text-sm text-slate-600">Get 2 GB of free private storage for your files and folders.</p>
+              <form className="mt-6 space-y-4" onSubmit={loginWithPassword}>
                 <div>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Captcha code</div>
-                  <div className="mt-2 flex items-center justify-between gap-3 rounded-md border border-slate-300 bg-white px-4 py-3">
-                    <span className="font-mono text-lg font-semibold tracking-[0.35em] text-slate-900">{registrationCaptchaCode}</span>
-                    <button
-                      type="button"
-                      onClick={() => setRegistrationCaptchaCode(generateCaptchaCode())}
-                      className="inline-flex h-9 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700"
-                    >
-                      Refresh
-                    </button>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700" htmlFor="owl-captcha">
-                    Enter captcha
+                  <label className="block text-sm font-medium text-slate-700" htmlFor="owl-username">
+                    Username
                   </label>
                   <input
-                    id="owl-captcha"
-                    value={registrationCaptchaInput}
-                    onChange={(event) => setRegistrationCaptchaInput(event.target.value)}
+                    id="owl-username"
+                    value={loginUsername}
+                    onChange={(event) => setLoginUsername(event.target.value)}
                     className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                    autoComplete="off"
-                    spellCheck={false}
+                    autoComplete="username"
                   />
                 </div>
-                <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={cancelRegistrationCaptcha}
-                    className="inline-flex h-11 flex-1 items-center justify-center rounded-md border border-slate-300 bg-white px-4 font-semibold text-slate-800"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={registrationCaptchaSubmitting || !registrationCaptchaInput.trim()}
-                    className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 font-semibold text-white disabled:opacity-50"
-                  >
-                    <Plus className="h-4 w-4" />
-                    {registrationCaptchaSubmitting ? "Checking" : "Continue"}
-                  </button>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700" htmlFor="owl-password">
+                    Password
+                  </label>
+                  <input
+                    id="owl-password"
+                    type="password"
+                    value={loginPassword}
+                    onChange={(event) => setLoginPassword(event.target.value)}
+                    className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                    autoComplete="current-password"
+                  />
                 </div>
+                <button
+                  type="submit"
+                  disabled={loginSubmitting || loading}
+                  className="inline-flex h-11 w-full items-center justify-center rounded-md bg-blue-600 px-5 font-semibold text-white disabled:opacity-50"
+                >
+                  {loginSubmitting ? "Logging in" : "Login"}
+                </button>
               </form>
-            ) : (
-              <button
-                type="button"
-                onClick={openRegistrationCaptcha}
-                className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-5 font-semibold text-slate-800"
+              {registrationFull ? (
+                <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">Max usage reached.</p>
+              ) : authMode === "register" ? (
+                <form className="mt-4 space-y-3 rounded-md border border-slate-200 bg-slate-50 p-4" onSubmit={submitRegistrationCaptcha}>
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Captcha code</div>
+                    <div className="mt-2 flex items-center justify-between gap-3 rounded-md border border-slate-300 bg-white px-4 py-3">
+                      <span className="font-mono text-lg font-semibold tracking-[0.35em] text-slate-900">{registrationCaptchaCode}</span>
+                      <button
+                        type="button"
+                        onClick={() => setRegistrationCaptchaCode(generateCaptchaCode())}
+                        className="inline-flex h-9 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700"
+                      >
+                        Refresh
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700" htmlFor="owl-captcha">
+                      Enter captcha
+                    </label>
+                    <input
+                      id="owl-captcha"
+                      value={registrationCaptchaInput}
+                      onChange={(event) => setRegistrationCaptchaInput(event.target.value)}
+                      className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={cancelRegistrationCaptcha}
+                      className="inline-flex h-11 flex-1 items-center justify-center rounded-md border border-slate-300 bg-white px-4 font-semibold text-slate-800"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={registrationCaptchaSubmitting || !registrationCaptchaInput.trim()}
+                      className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 font-semibold text-white disabled:opacity-50"
+                    >
+                      <Plus className="h-4 w-4" />
+                      {registrationCaptchaSubmitting ? "Checking" : "Continue"}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <button
+                  type="button"
+                  onClick={openRegistrationCaptcha}
+                  className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-5 font-semibold text-slate-800"
+                >
+                  <Plus className="h-4 w-4" />
+                  Create account
+                </button>
+              )}
+              <a
+                href={linkedInProfileUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
               >
-                <Plus className="h-4 w-4" />
-                Create account
-              </button>
-            )}
-            <a
-              href={linkedInProfileUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
-            >
-              <Linkedin className="h-4 w-4 text-blue-700" />
-              Ajay Kumar Pandit on LinkedIn
-            </a>
+                <Linkedin className="h-4 w-4 text-blue-700" />
+                Ajay Kumar Pandit on LinkedIn
+              </a>
+            </div>
           </div>
           {error ? <p className="mt-5 rounded-md border border-red-200 bg-red-50 p-3 text-red-700">{error}</p> : null}
         </section>
