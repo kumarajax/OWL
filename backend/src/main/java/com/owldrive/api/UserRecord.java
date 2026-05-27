@@ -13,5 +13,7 @@ public record UserRecord(
         Long quotaBytes,
         long usedBytes,
         OffsetDateTime createdAt,
-        OffsetDateTime deactivatedAt
+        OffsetDateTime deactivatedAt,
+        String termsVersion,
+        OffsetDateTime termsAcceptedAt
 ) {}

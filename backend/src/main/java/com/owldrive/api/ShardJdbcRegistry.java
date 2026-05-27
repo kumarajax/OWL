@@ -40,7 +40,7 @@ public class ShardJdbcRegistry {
         for (Map.Entry<String, JdbcTemplate> entry : shardsById.entrySet()) {
             List<UserRecord> matches = entry.getValue().query(
                     """
-                    SELECT id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
+                    SELECT id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at, terms_version, terms_accepted_at
                     FROM users
                     WHERE keycloak_id = ?
                     """,
@@ -57,7 +57,7 @@ public class ShardJdbcRegistry {
         for (Map.Entry<String, JdbcTemplate> entry : shardsById.entrySet()) {
             List<UserRecord> matches = entry.getValue().query(
                     """
-                    SELECT id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
+                    SELECT id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at, terms_version, terms_accepted_at
                     FROM users
                     WHERE lower(email) = lower(?)
                     """,
@@ -144,7 +144,9 @@ public class ShardJdbcRegistry {
                 rs.getObject("quota_bytes", Long.class),
                 rs.getLong("used_bytes"),
                 rs.getObject("created_at", java.time.OffsetDateTime.class),
-                rs.getObject("deactivated_at", java.time.OffsetDateTime.class));
+                rs.getObject("deactivated_at", java.time.OffsetDateTime.class),
+                rs.getString("terms_version"),
+                rs.getObject("terms_accepted_at", java.time.OffsetDateTime.class));
     }
 
     private FileRecord mapFile(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {

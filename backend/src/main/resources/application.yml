@@ -2,6 +2,17 @@ server:
   port: 8081
 
 spring:
+  mail:
+    host: ${SPRING_MAIL_HOST:localhost}
+    port: ${SPRING_MAIL_PORT:1025}
+    username: ${SPRING_MAIL_USERNAME:}
+    password: ${SPRING_MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: ${SPRING_MAIL_SMTP_AUTH:false}
+          starttls:
+            enable: ${SPRING_MAIL_SMTP_STARTTLS_ENABLE:false}
   servlet:
     multipart:
       max-file-size: ${APP_STORAGE_MAX_FILE_SIZE:1GB}
@@ -16,6 +27,14 @@ spring:
     create-schemas: true
 
 app:
+  public-base-url: ${APP_PUBLIC_BASE_URL:http://localhost:3000}
+  legal:
+    current-version: ${APP_LEGAL_CURRENT_VERSION:2026-05-26}
+    contact-email: ${APP_LEGAL_CONTACT_EMAIL:kumarajax@gmail.com}
+  signup:
+    approval-email-to: ${APP_SIGNUP_APPROVAL_EMAIL_TO:kumarajax@gmail.com}
+    password-encryption-key: ${APP_SIGNUP_PASSWORD_ENCRYPTION_KEY:local-dev-change-me}
+    token-days: ${APP_SIGNUP_APPROVAL_TOKEN_DAYS:7}
   users:
     max-users: ${APP_USERS_MAX_USERS:1000}
   cors:

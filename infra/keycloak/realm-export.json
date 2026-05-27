@@ -3,7 +3,7 @@
   "enabled": true,
   "sslRequired": "none",
   "accessTokenLifespan": 300,
-  "registrationAllowed": true,
+  "registrationAllowed": false,
   "registrationEmailAsUsername": true,
   "resetPasswordAllowed": true,
   "verifyEmail": false,
