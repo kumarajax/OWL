@@ -68,7 +68,7 @@ public class ProvisioningService {
                 UPDATE users
                 SET keycloak_id = ?, display_name = ?, email = ?, username = ?, role = ?, quota_bytes = ?, used_bytes = 0, deactivated_at = NULL
                 WHERE id = ?
-                RETURNING id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
+                RETURNING id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at, terms_version, terms_accepted_at
                 """,
                 this::mapUser,
                 keycloakId,
@@ -136,7 +136,7 @@ public class ProvisioningService {
                 """
                 INSERT INTO users (keycloak_id, display_name, email, username, role, quota_bytes, used_bytes)
                 VALUES (?, ?, ?, ?, ?, ?, 0)
-                RETURNING id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
+                RETURNING id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at, terms_version, terms_accepted_at
                 """,
                 this::mapUser,
                 keycloakId,
@@ -155,7 +155,7 @@ public class ProvisioningService {
                 UPDATE users
                 SET keycloak_id = ?, display_name = ?, email = ?, username = ?, role = ?, quota_bytes = ?
                 WHERE id = ? AND deactivated_at IS NULL
-                RETURNING id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
+                RETURNING id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at, terms_version, terms_accepted_at
                 """,
                 this::mapUser,
                 keycloakId,
@@ -176,7 +176,7 @@ public class ProvisioningService {
         for (String shardId : shardIds) {
             var matches = shardJdbcRegistry.jdbc(shardId).query(
                     """
-                    SELECT id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at
+                    SELECT id, keycloak_id, display_name, email, username, role, quota_bytes, used_bytes, created_at, deactivated_at, terms_version, terms_accepted_at
                     FROM users
                     WHERE lower(email) = lower(?)
                     """,
@@ -311,7 +311,9 @@ public class ProvisioningService {
                 rs.getObject("quota_bytes", Long.class),
                 rs.getLong("used_bytes"),
                 rs.getObject("created_at", java.time.OffsetDateTime.class),
-                rs.getObject("deactivated_at", java.time.OffsetDateTime.class));
+                rs.getObject("deactivated_at", java.time.OffsetDateTime.class),
+                rs.getString("terms_version"),
+                rs.getObject("terms_accepted_at", java.time.OffsetDateTime.class));
     }
 
     private FolderRecord mapFolder(ResultSet rs, int rowNum) throws SQLException {

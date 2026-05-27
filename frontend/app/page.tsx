@@ -61,6 +61,20 @@ type RegistrationStatus = {
   registrationAvailable: boolean;
 };
 
+type LegalAcceptance = {
+  currentVersion: string;
+  accepted: boolean;
+  acceptedVersion: string | null;
+  acceptedAt: string | null;
+};
+
+type SignupRequestStatus = {
+  status: string;
+  message: string;
+  email: string;
+  displayName: string | null;
+};
+
 type FolderRecord = {
   id: string;
   name: string;
@@ -154,6 +168,7 @@ type TelemetryFilters = {
 const realm = process.env.NEXT_PUBLIC_KEYCLOAK_REALM ?? "owldrive";
 const clientId = process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID ?? "owl-drive-web";
 const linkedInProfileUrl = "https://www.linkedin.com/in/ajaykumarpandit/";
+const currentLegalVersion = process.env.NEXT_PUBLIC_LEGAL_CURRENT_VERSION ?? "2026-05-26";
 const defaultTelemetryRetentionRows = 100000;
 const maxTelemetryRetentionRows = 1000000;
 const defaultUploadChunkSizeBytes = 50 * 1024 * 1024;
@@ -521,6 +536,14 @@ export default function Home() {
   const [registrationCaptchaCode, setRegistrationCaptchaCode] = useState("");
   const [registrationCaptchaInput, setRegistrationCaptchaInput] = useState("");
   const [registrationCaptchaSubmitting, setRegistrationCaptchaSubmitting] = useState(false);
+  const [signupDisplayName, setSignupDisplayName] = useState("");
+  const [signupEmail, setSignupEmail] = useState("");
+  const [signupPassword, setSignupPassword] = useState("");
+  const [signupConfirmPassword, setSignupConfirmPassword] = useState("");
+  const [signupTermsAccepted, setSignupTermsAccepted] = useState(false);
+  const [signupSubmittedMessage, setSignupSubmittedMessage] = useState("");
+  const [legalAcceptance, setLegalAcceptance] = useState<LegalAcceptance | null>(null);
+  const [acceptingLegal, setAcceptingLegal] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [rootFolder, setRootFolder] = useState<FolderRecord | null>(null);
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
@@ -1010,6 +1033,7 @@ export default function Home() {
     setToken(null);
     setAuthMode("login");
     setUser(null);
+    setLegalAcceptance(null);
     setStorageInfo(null);
     setRootFolder(null);
     setCurrentFolder(null);
@@ -1214,6 +1238,17 @@ export default function Home() {
           setChildren([]);
           return;
         }
+        const legalResponse = await fetch(`${apiBaseUrl}/api/me/legal-acceptance`, { headers });
+        const legal = await readJson<LegalAcceptance>(legalResponse);
+        setLegalAcceptance(legal);
+        if (!legal.accepted) {
+          setStorageInfo(null);
+          setRootFolder(null);
+          setCurrentFolder(null);
+          setBreadcrumbs([]);
+          setChildren([]);
+          return;
+        }
         await loadActiveDrive(headers);
       } catch (err) {
         handleRequestError(err, "Unable to load drive");
@@ -1246,19 +1281,26 @@ export default function Home() {
       setError("Max usage reached.");
       return;
     }
-    const verifier = randomString();
-    const challenge = await sha256(verifier);
-    sessionStorage.setItem("owl_pkce_verifier", verifier);
-    const redirectUri = getBrowserOrigin();
-    const params = new URLSearchParams({
-      client_id: clientId,
-      response_type: "code",
-      scope: "openid email profile",
-      redirect_uri: redirectUri,
-      code_challenge: challenge,
-      code_challenge_method: "S256"
+    const response = await fetch(`${apiBaseUrl}/api/public/signup-requests`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: signupEmail.trim(),
+        displayName: signupDisplayName.trim(),
+        password: signupPassword,
+        legalVersion: currentLegalVersion,
+        termsAccepted: signupTermsAccepted
+      })
     });
-    window.location.href = `${keycloakBaseUrl}/realms/${realm}/protocol/openid-connect/registrations?${params}`;
+    const result = await readJson<SignupRequestStatus>(response);
+    setSignupSubmittedMessage(result.message || "Signup request sent for approval.");
+    setSignupDisplayName("");
+    setSignupEmail("");
+    setSignupPassword("");
+    setSignupConfirmPassword("");
+    setSignupTermsAccepted(false);
+    setRegistrationCaptchaInput("");
+    setRegistrationCaptchaCode(generateCaptchaCode());
   }
 
   function openRegistrationCaptcha() {
@@ -1271,6 +1313,7 @@ export default function Home() {
   function cancelRegistrationCaptcha() {
     setRegistrationCaptchaCode("");
     setRegistrationCaptchaInput("");
+    setSignupSubmittedMessage("");
     setAuthMode("login");
   }
 
@@ -1286,11 +1329,50 @@ export default function Home() {
       setRegistrationCaptchaCode(generateCaptchaCode());
       return;
     }
+    if (!signupEmail.trim() || !signupPassword || !signupConfirmPassword) {
+      setError("Email and password are required.");
+      return;
+    }
+    if (signupPassword !== signupConfirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+    if (signupPassword.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+    if (!signupTermsAccepted) {
+      setError("You must accept the OWL Drive terms.");
+      return;
+    }
     setRegistrationCaptchaSubmitting(true);
+    setError("");
     try {
       await registerAccount();
+    } catch (err) {
+      handleRequestError(err, "Unable to submit signup request");
     } finally {
       setRegistrationCaptchaSubmitting(false);
+    }
+  }
+
+  async function acceptCurrentLegalTerms() {
+    if (!jsonHeaders || !legalAcceptance) return;
+    setAcceptingLegal(true);
+    setError("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/me/legal-acceptance`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ version: legalAcceptance.currentVersion })
+      });
+      const accepted = await readJson<LegalAcceptance>(response);
+      setLegalAcceptance(accepted);
+      await loadActiveDrive(jsonHeaders);
+    } catch (err) {
+      handleRequestError(err, "Unable to accept terms");
+    } finally {
+      setAcceptingLegal(false);
     }
   }
 
@@ -2438,52 +2520,110 @@ export default function Home() {
       ) : null}
 
       {!token ? (
-        <section className="mx-auto max-w-5xl px-6 py-12">
-          <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm md:grid md:grid-cols-[minmax(0,0.7fr)_420px]">
-            <div className="min-h-64 bg-slate-100 md:min-h-full">
-              <img src="/images/owl-drive-login.jpg" alt="OWL Drive file storage" className="h-full w-full object-cover" />
+        <section className="mx-auto max-w-6xl px-6 py-12">
+          <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm md:grid md:grid-cols-[minmax(420px,1fr)_minmax(460px,520px)]">
+            <div className="flex min-h-64 items-center justify-center bg-slate-100 p-6 md:min-h-full">
+              <img src="/images/owl-drive-login.jpg" alt="OWL Drive file storage" className="h-auto w-[70%] max-w-full rounded-md object-contain" />
             </div>
             <div className="p-8">
               <h1 className="text-2xl font-semibold">OWL Drive</h1>
               <p className="mt-2 text-sm text-slate-600">Get 2 GB of free private storage for your files and folders.</p>
-              <form className="mt-6 space-y-4" onSubmit={loginWithPassword}>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700" htmlFor="owl-username">
-                    Username
-                  </label>
-                  <input
-                    id="owl-username"
-                    value={loginUsername}
-                    onChange={(event) => setLoginUsername(event.target.value)}
-                    className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                    autoComplete="username"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700" htmlFor="owl-password">
-                    Password
-                  </label>
-                  <input
-                    id="owl-password"
-                    type="password"
-                    value={loginPassword}
-                    onChange={(event) => setLoginPassword(event.target.value)}
-                    className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                    autoComplete="current-password"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={loginSubmitting || loading}
-                  className="inline-flex h-11 w-full items-center justify-center rounded-md bg-blue-600 px-5 font-semibold text-white disabled:opacity-50"
-                >
-                  {loginSubmitting ? "Logging in" : "Login"}
-                </button>
-              </form>
+              {authMode === "login" ? (
+                <form className="mt-6 space-y-4" onSubmit={loginWithPassword}>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700" htmlFor="owl-username">
+                      Username
+                    </label>
+                    <input
+                      id="owl-username"
+                      value={loginUsername}
+                      onChange={(event) => setLoginUsername(event.target.value)}
+                      className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      autoComplete="username"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700" htmlFor="owl-password">
+                      Password
+                    </label>
+                    <input
+                      id="owl-password"
+                      type="password"
+                      value={loginPassword}
+                      onChange={(event) => setLoginPassword(event.target.value)}
+                      className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      autoComplete="current-password"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={loginSubmitting || loading}
+                    className="inline-flex h-11 w-full items-center justify-center rounded-md bg-blue-600 px-5 font-semibold text-white disabled:opacity-50"
+                  >
+                    {loginSubmitting ? "Logging in" : "Login"}
+                  </button>
+                </form>
+              ) : null}
               {registrationFull ? (
                 <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">Max usage reached.</p>
               ) : authMode === "register" ? (
                 <form className="mt-4 space-y-3 rounded-md border border-slate-200 bg-slate-50 p-4" onSubmit={submitRegistrationCaptcha}>
+                  {signupSubmittedMessage ? (
+                    <p className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{signupSubmittedMessage}</p>
+                  ) : null}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700" htmlFor="owl-signup-name">
+                      Name
+                    </label>
+                    <input
+                      id="owl-signup-name"
+                      value={signupDisplayName}
+                      onChange={(event) => setSignupDisplayName(event.target.value)}
+                      className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      autoComplete="name"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700" htmlFor="owl-signup-email">
+                      Email
+                    </label>
+                    <input
+                      id="owl-signup-email"
+                      type="email"
+                      value={signupEmail}
+                      onChange={(event) => setSignupEmail(event.target.value)}
+                      className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      autoComplete="email"
+                    />
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700" htmlFor="owl-signup-password">
+                        Password
+                      </label>
+                      <input
+                        id="owl-signup-password"
+                        type="password"
+                        value={signupPassword}
+                        onChange={(event) => setSignupPassword(event.target.value)}
+                        className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                        autoComplete="new-password"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700" htmlFor="owl-signup-confirm-password">
+                        Confirm
+                      </label>
+                      <input
+                        id="owl-signup-confirm-password"
+                        type="password"
+                        value={signupConfirmPassword}
+                        onChange={(event) => setSignupConfirmPassword(event.target.value)}
+                        className="mt-2 h-11 w-full rounded-md border border-slate-300 px-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                        autoComplete="new-password"
+                      />
+                    </div>
+                  </div>
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Captcha code</div>
                     <div className="mt-2 flex items-center justify-between gap-3 rounded-md border border-slate-300 bg-white px-4 py-3">
@@ -2510,6 +2650,29 @@ export default function Home() {
                       spellCheck={false}
                     />
                   </div>
+                  <label className="flex items-start gap-3 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={signupTermsAccepted}
+                      onChange={(event) => setSignupTermsAccepted(event.target.checked)}
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600"
+                    />
+                    <span>
+                      I accept the OWL Drive{" "}
+                      <a href="/terms" className="font-semibold text-blue-700 hover:text-blue-800">
+                        Terms
+                      </a>
+                      ,{" "}
+                      <a href="/acceptable-use" className="font-semibold text-blue-700 hover:text-blue-800">
+                        Acceptable Use
+                      </a>
+                      , and{" "}
+                      <a href="/privacy" className="font-semibold text-blue-700 hover:text-blue-800">
+                        Privacy
+                      </a>
+                      {" "}policy.
+                    </span>
+                  </label>
                   <div className="flex gap-3">
                     <button
                       type="button"
@@ -2520,11 +2683,11 @@ export default function Home() {
                     </button>
                     <button
                       type="submit"
-                      disabled={registrationCaptchaSubmitting || !registrationCaptchaInput.trim()}
+                      disabled={registrationCaptchaSubmitting || !registrationCaptchaInput.trim() || !signupTermsAccepted}
                       className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 font-semibold text-white disabled:opacity-50"
                     >
                       <Plus className="h-4 w-4" />
-                      {registrationCaptchaSubmitting ? "Checking" : "Continue"}
+                      {registrationCaptchaSubmitting ? "Submitting" : "Request approval"}
                     </button>
                   </div>
                 </form>
@@ -2547,7 +2710,38 @@ export default function Home() {
                 <Linkedin className="h-4 w-4 text-blue-700" />
                 Ajay Kumar Pandit on LinkedIn
               </a>
+              <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500">
+                <a href="/terms" className="hover:text-blue-700">Terms</a>
+                <a href="/acceptable-use" className="hover:text-blue-700">Acceptable Use</a>
+                <a href="/privacy" className="hover:text-blue-700">Privacy</a>
+                <a href="/abuse" className="hover:text-blue-700">Report Abuse</a>
+              </div>
             </div>
+          </div>
+          {error ? <p className="mt-5 rounded-md border border-red-200 bg-red-50 p-3 text-red-700">{error}</p> : null}
+        </section>
+      ) : legalAcceptance && !legalAcceptance.accepted ? (
+        <section className="mx-auto max-w-2xl px-6 py-12">
+          <div className="rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
+            <h1 className="text-2xl font-semibold text-slate-900">Accept OWL Drive Terms</h1>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              OWL Drive is provided for authorized educational and test use. You are responsible for your files, sharing,
+              and compliance with the terms and acceptable use policy.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+              <a href="/terms" className="font-semibold text-blue-700 hover:text-blue-800">Terms</a>
+              <a href="/acceptable-use" className="font-semibold text-blue-700 hover:text-blue-800">Acceptable Use</a>
+              <a href="/privacy" className="font-semibold text-blue-700 hover:text-blue-800">Privacy</a>
+              <a href="/abuse" className="font-semibold text-blue-700 hover:text-blue-800">Report Abuse</a>
+            </div>
+            <button
+              type="button"
+              onClick={acceptCurrentLegalTerms}
+              disabled={acceptingLegal}
+              className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-md bg-blue-600 px-5 font-semibold text-white disabled:opacity-50"
+            >
+              {acceptingLegal ? "Accepting" : "I accept and continue"}
+            </button>
           </div>
           {error ? <p className="mt-5 rounded-md border border-red-200 bg-red-50 p-3 text-red-700">{error}</p> : null}
         </section>

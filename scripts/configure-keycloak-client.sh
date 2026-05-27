@@ -56,7 +56,8 @@ done
 docker exec "$CONTAINER" /bin/sh -c "
   set -e
   /opt/keycloak/bin/kcadm.sh update realms/'$KEYCLOAK_REALM' \
-    -s 'sslRequired=none'
+    -s 'sslRequired=none' \
+    -s 'registrationAllowed=false'
   CLIENT_UUID=\$(/opt/keycloak/bin/kcadm.sh get clients -r '$KEYCLOAK_REALM' -q clientId='$KEYCLOAK_CLIENT_ID' --fields id --format csv --noquotes | tail -n 1)
   /opt/keycloak/bin/kcadm.sh update clients/\$CLIENT_UUID -r '$KEYCLOAK_REALM' \
     -s 'redirectUris=$redirect_uris_json' \

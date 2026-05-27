@@ -16,10 +16,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class MeController {
     private final ProvisioningService provisioningService;
     private final AccountService accountService;
+    private final LegalPolicyService legalPolicyService;
 
-    public MeController(ProvisioningService provisioningService, AccountService accountService) {
+    public MeController(ProvisioningService provisioningService, AccountService accountService, LegalPolicyService legalPolicyService) {
         this.provisioningService = provisioningService;
         this.accountService = accountService;
+        this.legalPolicyService = legalPolicyService;
     }
 
     @GetMapping("/me")
@@ -32,6 +34,16 @@ public class MeController {
         UserRecord user = provisioningService.ensureUser(jwt);
         boolean unlimited = "ADMIN".equals(user.role()) || user.quotaBytes() == null;
         return new UserStorageRecord(user.role(), user.quotaBytes(), user.usedBytes(), unlimited);
+    }
+
+    @GetMapping("/me/legal-acceptance")
+    LegalAcceptanceRecord legalAcceptance(@AuthenticationPrincipal Jwt jwt) {
+        return legalPolicyService.status(jwt);
+    }
+
+    @PostMapping("/me/legal-acceptance")
+    LegalAcceptanceRecord acceptLegal(@AuthenticationPrincipal Jwt jwt, @RequestBody LegalAcceptanceRequest request) {
+        return legalPolicyService.accept(jwt, request);
     }
 
     @DeleteMapping("/me")
