@@ -61,6 +61,8 @@ type RegistrationStatus = {
   registrationAvailable: boolean;
 };
 
+const signupApprovalRequired = (process.env.NEXT_PUBLIC_USER_CREATION_APPROVAL_REQUIRED ?? "Y").trim().toLowerCase() !== "n";
+
 type LegalAcceptance = {
   currentVersion: string;
   accepted: boolean;
@@ -2687,7 +2689,7 @@ export default function Home() {
                       className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 font-semibold text-white disabled:opacity-50"
                     >
                       <Plus className="h-4 w-4" />
-                      {registrationCaptchaSubmitting ? "Submitting" : "Request approval"}
+                      {registrationCaptchaSubmitting ? "Submitting" : signupApprovalRequired ? "Request approval" : "Create account"}
                     </button>
                   </div>
                 </form>
