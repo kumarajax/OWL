@@ -2522,8 +2522,8 @@ export default function Home() {
       {!token ? (
         <section className="mx-auto max-w-6xl px-6 py-12">
           <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm md:grid md:grid-cols-[minmax(420px,1fr)_minmax(460px,520px)]">
-            <div className="min-h-64 bg-slate-100 md:min-h-full">
-              <img src="/images/owl-drive-login.jpg" alt="OWL Drive file storage" className="h-full w-full object-cover" />
+            <div className="flex min-h-64 items-center justify-center bg-slate-100 p-6 md:min-h-full">
+              <img src="/images/owl-drive-login.jpg" alt="OWL Drive file storage" className="h-auto w-[70%] max-w-full rounded-md object-contain" />
             </div>
             <div className="p-8">
               <h1 className="text-2xl font-semibold">OWL Drive</h1>
