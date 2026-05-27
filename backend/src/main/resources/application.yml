@@ -32,6 +32,7 @@ app:
     current-version: ${APP_LEGAL_CURRENT_VERSION:2026-05-26}
     contact-email: ${APP_LEGAL_CONTACT_EMAIL:kumarajax@gmail.com}
   signup:
+    approval-required: ${USER_CREATION_APPROVAL_REQUIRED:Y}
     approval-email-to: ${APP_SIGNUP_APPROVAL_EMAIL_TO:kumarajax@gmail.com}
     password-encryption-key: ${APP_SIGNUP_PASSWORD_ENCRYPTION_KEY:local-dev-change-me}
     token-days: ${APP_SIGNUP_APPROVAL_TOKEN_DAYS:7}

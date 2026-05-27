@@ -40,6 +40,7 @@ public class SignupApprovalService {
 
     private final JdbcTemplate jdbc;
     private final ShardJdbcRegistry shardJdbcRegistry;
+    private final UserCapacityService userCapacityService;
     private final ObjectMapper objectMapper;
     private final JavaMailSender mailSender;
     private final HttpClient httpClient;
@@ -48,6 +49,7 @@ public class SignupApprovalService {
     private final String keycloakAdminUser;
     private final String keycloakAdminPassword;
     private final String publicBaseUrl;
+    private final boolean approvalRequired;
     private final String approvalEmailTo;
     private final String legalVersion;
     private final String encryptionKeyMaterial;
@@ -57,6 +59,7 @@ public class SignupApprovalService {
     public SignupApprovalService(
             JdbcTemplate jdbc,
             ShardJdbcRegistry shardJdbcRegistry,
+            UserCapacityService userCapacityService,
             ObjectMapper objectMapper,
             JavaMailSender mailSender,
             @Value("${app.keycloak.base-url:${KEYCLOAK_INTERNAL_URL:http://localhost:8080}}") String keycloakBaseUrl,
@@ -64,6 +67,7 @@ public class SignupApprovalService {
             @Value("${app.keycloak.admin-user:${KEYCLOAK_ADMIN_USER:admin}}") String keycloakAdminUser,
             @Value("${app.keycloak.admin-password:${KEYCLOAK_ADMIN_PASSWORD:admin}}") String keycloakAdminPassword,
             @Value("${app.public-base-url:http://localhost:3000}") String publicBaseUrl,
+            @Value("${app.signup.approval-required:Y}") String approvalRequired,
             @Value("${app.signup.approval-email-to:kumarajax@gmail.com}") String approvalEmailTo,
             @Value("${app.legal.current-version:2026-05-26}") String legalVersion,
             @Value("${app.signup.password-encryption-key:local-dev-change-me}") String encryptionKeyMaterial,
@@ -71,6 +75,7 @@ public class SignupApprovalService {
             @Value("${spring.mail.username:}") String mailFrom) {
         this.jdbc = jdbc;
         this.shardJdbcRegistry = shardJdbcRegistry;
+        this.userCapacityService = userCapacityService;
         this.objectMapper = objectMapper;
         this.mailSender = mailSender;
         this.httpClient = HttpClient.newHttpClient();
@@ -79,6 +84,7 @@ public class SignupApprovalService {
         this.keycloakAdminUser = keycloakAdminUser;
         this.keycloakAdminPassword = keycloakAdminPassword;
         this.publicBaseUrl = trimTrailingSlash(publicBaseUrl);
+        this.approvalRequired = isTruthy(approvalRequired);
         this.approvalEmailTo = approvalEmailTo;
         this.legalVersion = legalVersion;
         this.encryptionKeyMaterial = encryptionKeyMaterial;
@@ -103,6 +109,18 @@ public class SignupApprovalService {
         if (shardJdbcRegistry.findSingleUserByVerifiedEmail(email).isPresent() || keycloakUserExists(email)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "An account already exists for this email");
         }
+        if (!approvalRequired) {
+            userCapacityService.requireAvailableSlot();
+            String keycloakUserId = createKeycloakUser(email, displayName, password);
+            assignUserRole(keycloakUserId);
+            try {
+                sendApplicantCreatedEmail(email);
+            } catch (ResponseStatusException ex) {
+                log.warn("Unable to send direct signup confirmation email to {}", email, ex);
+            }
+            return new SignupRequestStatusRecord("CREATED", "Account created successfully. You can now sign in.", email, displayName);
+        }
+
         Integer pendingCount = jdbc.queryForObject(
                 "SELECT count(*) FROM signup_requests WHERE lower(email) = lower(?) AND status = 'PENDING'",
                 Integer.class,
@@ -410,6 +428,11 @@ public class SignupApprovalService {
                 "Your OWL Drive account request was approved. You can now sign in at " + publicBaseUrl + ".");
     }
 
+    private void sendApplicantCreatedEmail(String email) {
+        sendEmail(email, "OWL Drive account created",
+                "Your OWL Drive account has been created. You can now sign in at " + publicBaseUrl + ".");
+    }
+
     private void sendApplicantRejectedEmail(String email, String reason) {
         String reasonText = reason == null ? "" : "\n\nReason:\n" + reason;
         sendEmail(email, "OWL Drive signup request rejected",
@@ -537,6 +560,17 @@ public class SignupApprovalService {
             return "http://localhost:3000";
         }
         return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
+    }
+
+    private boolean isTruthy(String value) {
+        if (value == null) {
+            return false;
+        }
+        String normalized = value.trim();
+        return normalized.equalsIgnoreCase("y")
+                || normalized.equalsIgnoreCase("yes")
+                || normalized.equalsIgnoreCase("true")
+                || normalized.equals("1");
     }
 
     private record EncryptedPassword(String cipherText, String nonce) {}
