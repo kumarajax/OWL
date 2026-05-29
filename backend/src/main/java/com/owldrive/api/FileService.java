@@ -215,12 +215,12 @@ public class FileService {
         if (file.parentFolderId().equals(parent.id())) {
             return file;
         }
-        rejectDuplicateFileName(shardJdbc, user.id(), parent.id(), file.originalName());
+        String newOriginalName = uniqueMoveFileName(shardJdbc, user.id(), parent.id(), file.originalName());
         try {
             return shardJdbc.queryForObject(
                     """
                     UPDATE files
-                    SET parent_folder_id = ?, updated_at = now()
+                    SET parent_folder_id = ?, original_name = ?, updated_at = now()
                     WHERE id = ? AND owner_id = ? AND deleted_at IS NULL
                     RETURNING id, owner_id, parent_folder_id, original_name, storage_pool, storage_key,
                               content_type, size_bytes, checksum_sha256,
@@ -228,9 +228,31 @@ public class FileService {
                     """,
                     this::mapFile,
                     parent.id(),
+                    newOriginalName,
                     file.id(),
                     user.id());
         } catch (DataIntegrityViolationException ex) {
+            String retryName = uniqueMoveFileName(currentJdbc(), user.id(), parent.id(), file.originalName());
+            if (!retryName.equals(newOriginalName)) {
+                try {
+                    return shardJdbc.queryForObject(
+                            """
+                            UPDATE files
+                            SET parent_folder_id = ?, original_name = ?, updated_at = now()
+                            WHERE id = ? AND owner_id = ? AND deleted_at IS NULL
+                            RETURNING id, owner_id, parent_folder_id, original_name, storage_pool, storage_key,
+                                      content_type, size_bytes, checksum_sha256,
+                                      created_at, updated_at, deleted_at
+                            """,
+                            this::mapFile,
+                            parent.id(),
+                            retryName,
+                            file.id(),
+                            user.id());
+                } catch (DataIntegrityViolationException retryEx) {
+                    throw badRequest("A file with this name already exists there");
+                }
+            }
             throw badRequest("A file with this name already exists there");
         }
     }
@@ -618,6 +640,35 @@ public class FileService {
         if (findActiveFileByName(shardJdbc, ownerId, parentFolderId, originalName) != null) {
             throw badRequest("A file with this name already exists here");
         }
+    }
+
+    private String uniqueMoveFileName(JdbcTemplate shardJdbc, UUID ownerId, UUID parentFolderId, String originalName) {
+        String candidate = originalName;
+        int suffix = 1;
+        while (findActiveFileByName(shardJdbc, ownerId, parentFolderId, candidate) != null) {
+            candidate = suffixFileName(originalName, suffix);
+            suffix += 1;
+        }
+        return candidate;
+    }
+
+    private String suffixFileName(String originalName, int suffix) {
+        String suffixText = "_" + suffix;
+        int dotIndex = originalName.lastIndexOf('.');
+        if (dotIndex <= 0) {
+            return trimToLength(originalName, 255 - suffixText.length()) + suffixText;
+        }
+        String base = originalName.substring(0, dotIndex);
+        String extension = originalName.substring(dotIndex);
+        int maxBaseLength = Math.max(1, 255 - suffixText.length() - extension.length());
+        return trimToLength(base, maxBaseLength) + suffixText + extension;
+    }
+
+    private String trimToLength(String value, int maxLength) {
+        if (value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, Math.max(0, maxLength));
     }
 
     private FileRecord requireOwnedActiveFile(UserRecord user, UUID fileId) {
