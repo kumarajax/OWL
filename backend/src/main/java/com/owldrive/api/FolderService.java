@@ -154,9 +154,13 @@ public class FolderService {
             if (isFolderInSubtree(shardJdbc, user.id(), folder.id(), newParentId)) {
                 throw badRequest("Folder cannot be moved into one of its descendants");
             }
+            if (folder.parentId().equals(newParentId) && !hasName) {
+                return folder;
+            }
+            newName = uniqueMoveFolderName(shardJdbc, user.id(), newParentId, newName, folder.id());
+        } else {
+            rejectDuplicateName(shardJdbc, user.id(), newParentId, newName, folder.id());
         }
-
-        rejectDuplicateName(shardJdbc, user.id(), newParentId, newName, folder.id());
 
         return shardJdbc.queryForObject(
                 """
@@ -328,6 +332,10 @@ public class FolderService {
     }
 
     private FolderRecord findActiveChildFolder(JdbcTemplate shardJdbc, UUID ownerId, UUID parentId, String name) {
+        return findActiveChildFolder(shardJdbc, ownerId, parentId, name, null);
+    }
+
+    private FolderRecord findActiveChildFolder(JdbcTemplate shardJdbc, UUID ownerId, UUID parentId, String name, UUID currentFolderId) {
         return shardJdbc.query(
                 """
                 SELECT id, name, owner_id, parent_id, created_at, updated_at, deleted_at
@@ -336,11 +344,14 @@ public class FolderService {
                   AND parent_id = ?
                   AND deleted_at IS NULL
                   AND lower(name) = lower(?)
+                  AND (?::uuid IS NULL OR id <> ?::uuid)
                 """,
                 this::mapFolder,
                 ownerId,
                 parentId,
-                name).stream().findFirst().orElse(null);
+                name,
+                currentFolderId,
+                currentFolderId).stream().findFirst().orElse(null);
     }
 
     private String validateName(String rawName) {
@@ -383,6 +394,29 @@ public class FolderService {
         if (count != null && count > 0) {
             throw badRequest("A folder with this name already exists here");
         }
+    }
+
+    private String uniqueMoveFolderName(JdbcTemplate shardJdbc, UUID ownerId, UUID parentId, String originalName, UUID currentFolderId) {
+        String candidate = originalName;
+        int suffix = 1;
+        while (findActiveChildFolder(shardJdbc, ownerId, parentId, candidate, currentFolderId) != null) {
+            candidate = suffixFolderName(originalName, suffix);
+            suffix += 1;
+        }
+        return candidate;
+    }
+
+    private String suffixFolderName(String originalName, int suffix) {
+        String suffixText = "_" + suffix;
+        int maxLength = Math.max(1, 255 - suffixText.length());
+        return trimToLength(originalName, maxLength) + suffixText;
+    }
+
+    private String trimToLength(String value, int maxLength) {
+        if (value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, Math.max(0, maxLength));
     }
 
     private boolean isFolderInSubtree(JdbcTemplate shardJdbc, UUID ownerId, UUID rootFolderId, UUID candidateFolderId) {

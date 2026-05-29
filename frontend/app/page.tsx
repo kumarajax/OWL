@@ -314,7 +314,7 @@ async function readJson<T>(response: Response): Promise<T> {
   let message = `Request failed with ${response.status}`;
   try {
     const body = await response.json();
-    message = body.message || body.error || message;
+    message = body.message || body.detail || body.error_description || body.error || body.title || message;
   } catch {
     // Keep the status-based message.
   }
@@ -1851,25 +1851,25 @@ export default function Home() {
     setShareCopied(false);
   }
 
-  function toggleFileSelection(fileId: string) {
+  function toggleFileSelection(itemId: string) {
     setSelectedFileIds((current) => {
       const next = new Set(current);
-      if (next.has(fileId)) {
-        next.delete(fileId);
+      if (next.has(itemId)) {
+        next.delete(itemId);
       } else {
-        next.add(fileId);
+        next.add(itemId);
       }
       return next;
     });
   }
 
   function toggleAllFiles() {
-    const fileIds = children.filter((item) => item.itemType === "file").map((item) => item.id);
+    const itemIds = children.map((item) => item.id);
     setSelectedFileIds((current) => {
-      if (fileIds.length > 0 && fileIds.every((id) => current.has(id))) {
+      if (itemIds.length > 0 && itemIds.every((id) => current.has(id))) {
         return new Set();
       }
-      return new Set(fileIds);
+      return new Set(itemIds);
     });
   }
 
@@ -1881,19 +1881,20 @@ export default function Home() {
   }
 
   async function deleteSelectedFiles() {
-    if (!jsonHeaders || !currentFolder || selectedFileIds.size === 0) return;
-    const confirmed = window.confirm(`Delete ${selectedFileIds.size} selected file${selectedFileIds.size === 1 ? "" : "s"}?`);
+    const selectedFiles = children.filter((item) => item.itemType === "file" && selectedFileIds.has(item.id));
+    if (!jsonHeaders || !currentFolder || selectedFiles.length === 0) return;
+    const confirmed = window.confirm(`Delete ${selectedFiles.length} selected file${selectedFiles.length === 1 ? "" : "s"}?`);
     if (!confirmed) return;
     setLoading(true);
     setError("");
     try {
-      for (const fileId of selectedFileIds) {
-        const response = await fetch(`${apiBaseUrl}/api/files/${fileId}`, {
+      for (const file of selectedFiles) {
+        const response = await fetch(`${apiBaseUrl}/api/files/${file.id}`, {
           method: "DELETE",
           headers: jsonHeaders
         });
         if (!response.ok) await readJson(response);
-        discardMediaViewerFile(fileId);
+        discardMediaViewerFile(file.id);
       }
       setSelectedFileIds(new Set());
       await loadChildren(currentFolder);
@@ -1905,17 +1906,26 @@ export default function Home() {
   }
 
   async function moveSelectedFiles() {
-    if (!jsonHeaders || !currentFolder || !batchMoveTargetId || selectedFileIds.size === 0) return;
+    const selectedItems = children.filter((item) => selectedFileIds.has(item.id));
+    if (!jsonHeaders || !currentFolder || !batchMoveTargetId || selectedItems.length === 0) return;
     setLoading(true);
     setError("");
     try {
-      for (const fileId of selectedFileIds) {
-        const response = await fetch(`${apiBaseUrl}/api/files/${fileId}`, {
-          method: "PATCH",
-          headers: jsonHeaders,
-          body: JSON.stringify({ parentFolderId: batchMoveTargetId })
-        });
-        await readJson<DriveItem>(response);
+      for (const item of selectedItems) {
+        const itemId = item.id;
+        const response = await fetch(
+          item.itemType === "folder" ? `${apiBaseUrl}/api/folders/${itemId}` : `${apiBaseUrl}/api/files/${itemId}`,
+          {
+            method: "PATCH",
+            headers: jsonHeaders,
+            body: JSON.stringify(
+              item.itemType === "folder"
+                ? { parentId: batchMoveTargetId }
+                : { parentFolderId: batchMoveTargetId }
+            )
+          }
+        );
+        if (!response.ok) await readJson(response);
       }
       setSelectedFileIds(new Set());
       setBatchMoveTargetId("");
@@ -2083,8 +2093,10 @@ export default function Home() {
   const parentFolder = breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2] : null;
   const accountDeactivated = Boolean(user?.deactivatedAt);
   const registrationFull = registrationStatus ? !registrationStatus.registrationAvailable : false;
-  const visibleFileIds = children.filter((item) => item.itemType === "file").map((item) => item.id);
-  const allVisibleFilesSelected = visibleFileIds.length > 0 && visibleFileIds.every((id) => selectedFileIds.has(id));
+  const selectedItems = children.filter((item) => selectedFileIds.has(item.id));
+  const selectedFiles = selectedItems.filter((item) => item.itemType === "file");
+  const selectedFolders = selectedItems.filter((item) => item.itemType === "folder");
+  const allVisibleFilesSelected = children.length > 0 && children.every((item) => selectedFileIds.has(item.id));
   const moveTargets = [
     ...(parentFolder ? [{ id: parentFolder.id, name: `Parent: ${parentFolder.name}` }] : []),
     ...children.filter((item) => item.itemType === "folder").map((item) => ({ id: item.id, name: item.name }))
@@ -3345,15 +3357,15 @@ export default function Home() {
               </div>
             ) : null}
 
-            {selectedFileIds.size > 0 ? (
+            {selectedItems.length > 0 ? (
               <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-white p-3 text-sm shadow-sm">
                 <span className="font-semibold text-slate-700">
-                  {selectedFileIds.size} selected
+                  {selectedItems.length} selected
                 </span>
                 <button
                   type="button"
                   onClick={downloadSelectedFiles}
-                  disabled={loading || uploading}
+                  disabled={loading || uploading || selectedFiles.length === 0}
                   className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 font-semibold disabled:opacity-50"
                 >
                   <Download className="h-4 w-4" />
@@ -3384,7 +3396,7 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={deleteSelectedFiles}
-                  disabled={loading || uploading}
+                  disabled={loading || uploading || selectedFolders.length > 0 || selectedFiles.length === 0}
                   className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 bg-white px-3 font-semibold text-red-700 disabled:opacity-50"
                 >
                   <Trash2 className="h-4 w-4" />
@@ -3402,8 +3414,8 @@ export default function Home() {
                         type="checkbox"
                         checked={allVisibleFilesSelected}
                         onChange={toggleAllFiles}
-                        disabled={visibleFileIds.length === 0}
-                        aria-label="Select all files"
+                        disabled={children.length === 0}
+                        aria-label="Select all items"
                         className="h-4 w-4"
                       />
                     </div>
@@ -3447,17 +3459,13 @@ export default function Home() {
                       >
                         <div className="flex items-start gap-3 md:hidden">
                           <div className="pt-1">
-                            {item.itemType === "file" ? (
-                              <input
-                                type="checkbox"
-                                checked={selectedFileIds.has(item.id)}
-                                onChange={() => toggleFileSelection(item.id)}
-                                aria-label={`Select ${item.name}`}
-                                className="h-4 w-4"
-                              />
-                            ) : (
-                              <div className="h-4 w-4" />
-                            )}
+                            <input
+                              type="checkbox"
+                              checked={selectedFileIds.has(item.id)}
+                              onChange={() => toggleFileSelection(item.id)}
+                              aria-label={`Select ${item.name}`}
+                              className="h-4 w-4"
+                            />
                           </div>
                           {item.itemType === "folder" ? <Folder className="mt-1 h-5 w-5 shrink-0 text-blue-600" /> : <FileText className="mt-1 h-5 w-5 shrink-0 text-slate-400" />}
                           <div className="min-w-0 flex-1">
@@ -3476,15 +3484,13 @@ export default function Home() {
                         </div>
 
                         <div className="hidden md:flex md:items-center md:justify-center">
-                          {item.itemType === "file" ? (
-                            <input
-                              type="checkbox"
-                              checked={selectedFileIds.has(item.id)}
-                              onChange={() => toggleFileSelection(item.id)}
-                              aria-label={`Select ${item.name}`}
-                              className="h-4 w-4"
-                            />
-                          ) : null}
+                          <input
+                            type="checkbox"
+                            checked={selectedFileIds.has(item.id)}
+                            onChange={() => toggleFileSelection(item.id)}
+                            aria-label={`Select ${item.name}`}
+                            className="h-4 w-4"
+                          />
                         </div>
                         {item.itemType === "folder" ? (
                           <button onClick={() => openFolder(itemToFolder(item))} className="hidden min-w-0 items-center gap-3 rounded-md py-2 text-left md:flex">
@@ -3544,17 +3550,13 @@ export default function Home() {
                       className="group cursor-pointer rounded-md border border-slate-200 bg-white p-3 text-sm hover:border-blue-200 hover:bg-blue-50/40"
                     >
                       <div className="mb-3 flex items-center justify-between gap-2">
-                        {item.itemType === "file" ? (
-                          <input
-                            type="checkbox"
-                            checked={selectedFileIds.has(item.id)}
-                            onChange={() => toggleFileSelection(item.id)}
-                            aria-label={`Select ${item.name}`}
-                            className="h-4 w-4"
-                          />
-                        ) : (
-                          <span />
-                        )}
+                        <input
+                          type="checkbox"
+                          checked={selectedFileIds.has(item.id)}
+                          onChange={() => toggleFileSelection(item.id)}
+                          aria-label={`Select ${item.name}`}
+                          className="h-4 w-4"
+                        />
                         <div className="flex items-center gap-1 opacity-100 md:opacity-0 md:transition group-hover:opacity-100">
                           {item.itemType === "folder" ? (
                             <>
