@@ -337,8 +337,9 @@ EOF
 
     cat <<'EOF'
       APP_CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,https://owl-drive.com,https://www.owl-drive.com
-      APP_CORS_ALLOWED_ORIGIN_PATTERNS: https://*.owl-drive.com
+      APP_CORS_ALLOWED_ORIGIN_PATTERNS: https://*.owl-drive.com,http://192.168.*.*:3000,http://10.*.*.*:3000,http://172.*.*.*:3000
       APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUERS: https://auth.owl-drive.com/realms/owldrive,http://localhost:8080/realms/owldrive,http://127.0.0.1:8080/realms/owldrive
+      APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUER_PATTERNS: http://192.168.*.*:8080/realms/owldrive,http://10.*.*.*:8080/realms/owldrive,http://172.*.*.*:8080/realms/owldrive
     ports:
       - "8081:8081"
     depends_on:
