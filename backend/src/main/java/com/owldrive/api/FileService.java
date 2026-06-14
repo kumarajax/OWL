@@ -129,6 +129,14 @@ public class FileService {
         }
     }
 
+    public void cancelChunkedUpload(Jwt jwt, String uploadId) {
+        UserRecord user = provisioningService.ensureUser(jwt);
+        validateUploadId(uploadId);
+        Path uploadDir = uploadDir(user.id(), uploadId);
+        abortMultipartUploadIfPresent(user.id(), uploadDir, uploadId);
+        deleteDirectoryQuietly(uploadDir);
+    }
+
     @Transactional
     public FileRecord completeChunkedUpload(
             Jwt jwt,
@@ -172,7 +180,11 @@ public class FileService {
             }
             return uploaded;
         } catch (IOException ex) {
+            abortMultipartUploadIfPresent(user.id(), uploadDir, uploadId);
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to store upload", ex);
+        } catch (ResponseStatusException ex) {
+            abortMultipartUploadIfPresent(user.id(), uploadDir, uploadId);
+            throw ex;
         } finally {
             deleteDirectoryQuietly(uploadDir);
         }
@@ -351,6 +363,7 @@ public class FileService {
             storedFile = objectStorageService.completeMultipartUpload(
                     storagePool, minioUploadId, user.id(), uploadId, uploadParts, checksumSha256, sizeBytes);
         } catch (IOException ex) {
+            abortMultipartUploadQuietly(storagePool, minioUploadId, user.id(), uploadId);
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to store file", ex);
         }
 
@@ -422,6 +435,7 @@ public class FileService {
             storedFile = objectStorageService.completeMultipartUpload(
                     storagePool, minioUploadId, user.id(), uploadId, uploadParts, checksumSha256, sizeBytes);
         } catch (IOException ex) {
+            abortMultipartUploadQuietly(storagePool, minioUploadId, user.id(), uploadId);
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to store file", ex);
         }
         try {
@@ -915,6 +929,29 @@ public class FileService {
 
     private void writeUploadPart(Path uploadDir, int chunkIndex, StoredUploadPart storedPart) throws IOException {
         Files.writeString(uploadDir.resolve(uploadPartFileName(chunkIndex)), storedPart.partNumber() + "\n" + storedPart.etag());
+    }
+
+    private void abortMultipartUploadIfPresent(UUID ownerId, Path uploadDir, String uploadId) {
+        String storagePool = null;
+        String minioUploadId = null;
+        try {
+            storagePool = readUploadStoragePool(uploadDir);
+            minioUploadId = readMinioUploadId(uploadDir);
+        } catch (IOException ex) {
+            log.warn("Unable to read chunk upload metadata for cleanup at {}", uploadDir, ex);
+        }
+        abortMultipartUploadQuietly(storagePool, minioUploadId, ownerId, uploadId);
+    }
+
+    private void abortMultipartUploadQuietly(String storagePool, String minioUploadId, UUID ownerId, String uploadId) {
+        if (storagePool == null || storagePool.isBlank() || minioUploadId == null || minioUploadId.isBlank()) {
+            return;
+        }
+        try {
+            objectStorageService.abortMultipartUpload(storagePool, minioUploadId, ownerId, uploadId);
+        } catch (IOException ex) {
+            log.warn("Unable to abort multipart upload {} in pool {}", uploadId, storagePool, ex);
+        }
     }
 
     private List<StoredUploadPart> readUploadParts(Path uploadDir, String storagePool, String minioUploadId, int totalChunks) throws IOException {

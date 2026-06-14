@@ -71,6 +71,41 @@ public class FolderService {
         return items;
     }
 
+    public List<DriveItemRecord> search(Jwt jwt, UUID folderId, String name) {
+        UserRecord user = provisioningService.ensureUser(jwt);
+        JdbcTemplate shardJdbc = currentJdbc();
+        requireOwnedActiveFolder(shardJdbc, user, folderId);
+        String query = normalizeSearchQuery(name);
+        String pattern = "%" + escapeLikePattern(query) + "%";
+        return shardJdbc.query(
+                """
+                WITH RECURSIVE subtree AS (
+                  SELECT id
+                  FROM folders
+                  WHERE id = ? AND owner_id = ? AND deleted_at IS NULL
+                  UNION ALL
+                  SELECT child.id
+                  FROM folders child
+                  JOIN subtree parent ON child.parent_id = parent.id
+                  WHERE child.owner_id = ? AND child.deleted_at IS NULL
+                )
+                SELECT id, owner_id, parent_folder_id, original_name, storage_pool, storage_key, content_type,
+                       size_bytes, checksum_sha256, created_at, updated_at, deleted_at
+                FROM files
+                WHERE owner_id = ?
+                  AND deleted_at IS NULL
+                  AND parent_folder_id IN (SELECT id FROM subtree)
+                  AND lower(original_name) LIKE lower(?) ESCAPE '\'
+                ORDER BY lower(original_name), original_name
+                """,
+                this::mapFile,
+                folderId,
+                user.id(),
+                user.id(),
+                user.id(),
+                pattern).stream().map(DriveItemRecord::file).toList();
+    }
+
     @Transactional
     public FolderRecord create(Jwt jwt, CreateFolderRequest request) {
         UserRecord user = provisioningService.ensureUser(jwt);
@@ -372,6 +407,24 @@ public class FolderService {
             throw badRequest("Folder name must be 255 characters or fewer");
         }
         return name;
+    }
+
+    private String normalizeSearchQuery(String rawQuery) {
+        if (rawQuery == null) {
+            throw badRequest("name is required");
+        }
+        String query = rawQuery.trim();
+        if (query.isEmpty()) {
+            throw badRequest("name is required");
+        }
+        return query;
+    }
+
+    private String escapeLikePattern(String value) {
+        return value
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
     }
 
     private void rejectDuplicateName(JdbcTemplate shardJdbc, UUID ownerId, UUID parentId, String name, UUID currentFolderId) {

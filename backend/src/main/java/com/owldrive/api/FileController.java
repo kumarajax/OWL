@@ -51,6 +51,14 @@ public class FileController {
         return ResponseEntity.noContent().build();
     }
 
+    @PostMapping("/cancel-chunked-upload")
+    ResponseEntity<Void> cancelChunkedUpload(
+            @AuthenticationPrincipal Jwt jwt,
+            @RequestParam("uploadId") String uploadId) {
+        fileService.cancelChunkedUpload(jwt, uploadId);
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/complete-chunked-upload")
     FileRecord completeChunkedUpload(
             @AuthenticationPrincipal Jwt jwt,
