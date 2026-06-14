@@ -26,6 +26,7 @@ import {
   Plus,
   RefreshCw,
   Share2,
+  Search,
   Save,
   SkipBack,
   SkipForward,
@@ -33,6 +34,7 @@ import {
   VolumeX,
   Trash2,
   Upload,
+  XCircle,
   X,
   UserCircle
 } from "lucide-react";
@@ -551,6 +553,10 @@ export default function Home() {
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
   const [currentFolder, setCurrentFolder] = useState<FolderRecord | null>(null);
   const [children, setChildren] = useState<DriveItem[]>([]);
+  const [driveSearchQuery, setDriveSearchQuery] = useState("");
+  const [activeDriveSearchQuery, setActiveDriveSearchQuery] = useState("");
+  const [driveSearchResults, setDriveSearchResults] = useState<DriveItem[]>([]);
+  const [searchingDrive, setSearchingDrive] = useState(false);
   const [breadcrumbs, setBreadcrumbs] = useState<FolderRecord[]>([]);
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
   const [batchMoveTargetId, setBatchMoveTargetId] = useState("");
@@ -632,9 +638,13 @@ export default function Home() {
   const mediaViewerRequestIdRef = useRef(0);
   const pendingUploadsRef = useRef<File[]>([]);
   const uploadingRef = useRef(false);
+  const uploadAbortControllerRef = useRef<AbortController | null>(null);
+  const activeChunkedUploadIdRef = useRef<string | null>(null);
+  const uploadCancelRequestedRef = useRef(false);
   const dragDepthRef = useRef(0);
   const keycloakBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_KEYCLOAK_URL, 8080);
   const apiBaseUrl = resolveServiceBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL, 8081);
+  const uploadChunkTimeoutMs = 5 * 60 * 1000;
 
   const jsonHeaders = useMemo(() => {
     return token ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } : undefined;
@@ -1107,6 +1117,72 @@ export default function Home() {
     setPendingUploads(next);
   }
 
+  function clearDriveSearchState() {
+    setDriveSearchQuery("");
+    setActiveDriveSearchQuery("");
+    setDriveSearchResults([]);
+    setSearchingDrive(false);
+  }
+
+  function isAbortError(err: unknown) {
+    return err instanceof DOMException && err.name === "AbortError";
+  }
+
+  async function cleanupChunkedUpload(uploadId: string | null) {
+    if (!bearerHeaders || !uploadId) return;
+    try {
+      const form = new FormData();
+      form.append("uploadId", uploadId);
+      const response = await fetch(`${apiBaseUrl}/api/files/cancel-chunked-upload`, {
+        method: "POST",
+        headers: bearerHeaders,
+        body: form
+      });
+      if (!response.ok) {
+        await readJson(response);
+      }
+    } catch (err) {
+      if (!isAbortError(err)) {
+        console.warn("Unable to cancel chunked upload", err);
+      }
+    } finally {
+      if (activeChunkedUploadIdRef.current === uploadId) {
+        activeChunkedUploadIdRef.current = null;
+      }
+    }
+  }
+
+  function cancelInFlightUpload() {
+    uploadCancelRequestedRef.current = true;
+    setUploadProgressLabel("Canceling upload...");
+    uploadAbortControllerRef.current?.abort();
+  }
+
+  async function performUploadRequest(form: FormData, url: string, timeoutMs = 0) {
+    const controller = new AbortController();
+    uploadAbortControllerRef.current = controller;
+    let timeoutHandle: number | null = null;
+    if (timeoutMs > 0) {
+      timeoutHandle = window.setTimeout(() => controller.abort(), timeoutMs);
+    }
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: bearerHeaders,
+        body: form,
+        signal: controller.signal
+      });
+      return response;
+    } finally {
+      if (timeoutHandle !== null) {
+        window.clearTimeout(timeoutHandle);
+      }
+      if (uploadAbortControllerRef.current === controller) {
+        uploadAbortControllerRef.current = null;
+      }
+    }
+  }
+
   function appendPendingUploads(incoming: File[]) {
     const merged = mergePendingUploads(pendingUploadsRef.current, incoming);
     setPendingUploadsAndRef(merged);
@@ -1187,6 +1263,35 @@ export default function Home() {
     [jsonHeaders]
   );
 
+  const loadFolderSearchResults = useCallback(
+    async (folder: FolderRecord, query: string) => {
+      if (!jsonHeaders) return;
+      const trimmedQuery = query.trim();
+      if (!trimmedQuery) {
+        setDriveSearchResults([]);
+        setSearchingDrive(false);
+        return;
+      }
+      setSearchingDrive(true);
+      setError("");
+      try {
+        const params = new URLSearchParams({ name: trimmedQuery });
+        const response = await fetch(`${apiBaseUrl}/api/folders/${folder.id}/search?${params.toString()}`, {
+          headers: jsonHeaders
+        });
+        setDriveSearchResults(await readJson<DriveItem[]>(response));
+        setActiveDriveSearchQuery(trimmedQuery);
+        setSelectedFileIds(new Set());
+        setBatchMoveTargetId("");
+      } catch (err) {
+        handleRequestError(err, "Unable to search files");
+      } finally {
+        setSearchingDrive(false);
+      }
+    },
+    [apiBaseUrl, jsonHeaders]
+  );
+
   async function loadActiveDrive(headers: Record<string, string>) {
     const storage = await loadStorage(headers);
     setStorageInfo(storage);
@@ -1196,6 +1301,7 @@ export default function Home() {
     setRootFolder(root);
     setCurrentFolder(root);
     setBreadcrumbs([root]);
+    clearDriveSearchState();
 
     let rootChildren: DriveItem[] = [];
     try {
@@ -1508,6 +1614,7 @@ export default function Home() {
   async function openFolder(folder: FolderRecord) {
     setActiveView("drive");
     setCurrentFolder(folder);
+    clearDriveSearchState();
     setBreadcrumbs((items) => {
       const existingIndex = items.findIndex((item) => item.id === folder.id);
       if (existingIndex >= 0) return items.slice(0, existingIndex + 1);
@@ -1517,7 +1624,33 @@ export default function Home() {
   }
 
   async function refreshCurrentFolder() {
-    if (currentFolder) await loadChildren(currentFolder);
+    if (!currentFolder) return;
+    if (activeDriveSearchQuery) {
+      await loadFolderSearchResults(currentFolder, activeDriveSearchQuery);
+      return;
+    }
+    await loadChildren(currentFolder);
+  }
+
+  async function submitDriveSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!currentFolder) return;
+    const query = driveSearchQuery.trim();
+    if (!query) {
+      clearDriveSearchState();
+      await loadChildren(currentFolder);
+      return;
+    }
+    await loadFolderSearchResults(currentFolder, query);
+  }
+
+  async function clearDriveSearch() {
+    if (!currentFolder) {
+      clearDriveSearchState();
+      return;
+    }
+    clearDriveSearchState();
+    await loadChildren(currentFolder);
   }
 
   async function createFolder() {
@@ -1604,13 +1737,20 @@ export default function Home() {
   async function uploadPendingFiles() {
     if (!bearerHeaders || !currentFolder || loading || uploadingRef.current) return;
     uploadingRef.current = true;
+    uploadCancelRequestedRef.current = false;
     setUploading(true);
     setError("");
     try {
       while (pendingUploadsRef.current.length > 0) {
+        if (uploadCancelRequestedRef.current) {
+          throw new Error("Upload canceled");
+        }
         const filesToUpload = [...pendingUploadsRef.current];
         setUploadProgressLabel(`Uploading 0 of ${filesToUpload.length}`);
         for (let index = 0; index < filesToUpload.length; index += 1) {
+          if (uploadCancelRequestedRef.current) {
+            throw new Error("Upload canceled");
+          }
           const file = filesToUpload[index];
           setUploadProgressLabel(`Uploading ${index + 1} of ${filesToUpload.length}: ${file.name}`);
           if (file.size > uploadChunkSizeBytes) {
@@ -1627,13 +1767,25 @@ export default function Home() {
       await loadChildren(currentFolder);
       await refreshStorage();
     } catch (err) {
-      handleRequestError(err, "Unable to upload file");
-      if (pendingUploadsRef.current.length > 0) {
-        setUploadProgressLabel(`Upload paused with ${pendingUploadsRef.current.length} file${pendingUploadsRef.current.length === 1 ? "" : "s"} queued`);
+      const canceled = uploadCancelRequestedRef.current || isAbortError(err) || (err instanceof Error && err.message === "Upload canceled");
+      if (activeChunkedUploadIdRef.current) {
+        await cleanupChunkedUpload(activeChunkedUploadIdRef.current);
+      }
+      if (canceled) {
+        setPendingUploadsAndRef([]);
+        setUploadProgressLabel("Upload canceled");
       } else {
-        setUploadProgressLabel("");
+        handleRequestError(err, "Unable to upload file");
+        if (pendingUploadsRef.current.length > 0) {
+          setUploadProgressLabel(`Upload paused with ${pendingUploadsRef.current.length} file${pendingUploadsRef.current.length === 1 ? "" : "s"} queued`);
+        } else {
+          setUploadProgressLabel("");
+        }
       }
     } finally {
+      uploadAbortControllerRef.current = null;
+      uploadCancelRequestedRef.current = false;
+      activeChunkedUploadIdRef.current = null;
       uploadingRef.current = false;
       setUploading(false);
     }
@@ -1645,19 +1797,19 @@ export default function Home() {
     form.append("parentFolderId", currentFolder.id);
     form.append("file", file);
     form.append("relativePath", file.webkitRelativePath || file.name);
-    const response = await fetch(`${apiBaseUrl}/api/files/upload`, {
-      method: "POST",
-      headers: bearerHeaders,
-      body: form
-    });
+    const response = await performUploadRequest(form, `${apiBaseUrl}/api/files/upload`);
     await readJson(response);
   }
 
   async function uploadChunkedFile(file: File, fileCount: number, fileIndex: number) {
     if (!bearerHeaders || !currentFolder) return;
     const uploadId = crypto.randomUUID();
+    activeChunkedUploadIdRef.current = uploadId;
     const totalChunks = Math.ceil(file.size / uploadChunkSizeBytes);
     for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+      if (uploadCancelRequestedRef.current) {
+        throw new Error("Upload canceled");
+      }
       const start = chunkIndex * uploadChunkSizeBytes;
       const end = Math.min(start + uploadChunkSizeBytes, file.size);
       const chunk = file.slice(start, end);
@@ -1670,11 +1822,7 @@ export default function Home() {
       form.append("totalChunks", String(totalChunks));
       form.append("totalSizeBytes", String(file.size));
       form.append("chunk", chunk, `${file.name}.part${chunkIndex}`);
-      const response = await fetch(`${apiBaseUrl}/api/files/upload-chunk`, {
-        method: "POST",
-        headers: bearerHeaders,
-        body: form
-      });
+      const response = await performUploadRequest(form, `${apiBaseUrl}/api/files/upload-chunk`, uploadChunkTimeoutMs);
       if (!response.ok) await readJson(response);
     }
 
@@ -1686,12 +1834,9 @@ export default function Home() {
     completeForm.append("contentType", file.type || "application/octet-stream");
     completeForm.append("totalChunks", String(totalChunks));
     completeForm.append("totalSizeBytes", String(file.size));
-    const completeResponse = await fetch(`${apiBaseUrl}/api/files/complete-chunked-upload`, {
-      method: "POST",
-      headers: bearerHeaders,
-      body: completeForm
-    });
+    const completeResponse = await performUploadRequest(completeForm, `${apiBaseUrl}/api/files/complete-chunked-upload`);
     await readJson(completeResponse);
+    activeChunkedUploadIdRef.current = null;
   }
 
   async function addDraggedFiles(dataTransfer: DataTransfer) {
@@ -1864,7 +2009,7 @@ export default function Home() {
   }
 
   function toggleAllFiles() {
-    const itemIds = children.map((item) => item.id);
+    const itemIds = visibleChildren.map((item) => item.id);
     setSelectedFileIds((current) => {
       if (itemIds.length > 0 && itemIds.every((id) => current.has(id))) {
         return new Set();
@@ -1874,14 +2019,14 @@ export default function Home() {
   }
 
   async function downloadSelectedFiles() {
-    const selectedFiles = children.filter((item) => item.itemType === "file" && selectedFileIds.has(item.id));
+    const selectedFiles = visibleChildren.filter((item) => item.itemType === "file" && selectedFileIds.has(item.id));
     for (const file of selectedFiles) {
       await downloadFile(file);
     }
   }
 
   async function deleteSelectedFiles() {
-    const selectedFiles = children.filter((item) => item.itemType === "file" && selectedFileIds.has(item.id));
+    const selectedFiles = visibleChildren.filter((item) => item.itemType === "file" && selectedFileIds.has(item.id));
     if (!jsonHeaders || !currentFolder || selectedFiles.length === 0) return;
     const confirmed = window.confirm(`Delete ${selectedFiles.length} selected file${selectedFiles.length === 1 ? "" : "s"}?`);
     if (!confirmed) return;
@@ -1906,7 +2051,7 @@ export default function Home() {
   }
 
   async function moveSelectedFiles() {
-    const selectedItems = children.filter((item) => selectedFileIds.has(item.id));
+    const selectedItems = visibleChildren.filter((item) => selectedFileIds.has(item.id));
     if (!jsonHeaders || !currentFolder || !batchMoveTargetId || selectedItems.length === 0) return;
     setLoading(true);
     setError("");
@@ -2093,17 +2238,24 @@ export default function Home() {
   const parentFolder = breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2] : null;
   const accountDeactivated = Boolean(user?.deactivatedAt);
   const registrationFull = registrationStatus ? !registrationStatus.registrationAvailable : false;
-  const selectedItems = children.filter((item) => selectedFileIds.has(item.id));
+  const isDriveSearchActive = activeDriveSearchQuery.length > 0;
+  const visibleChildren = isDriveSearchActive ? driveSearchResults : children;
+  const selectedItems = visibleChildren.filter((item) => selectedFileIds.has(item.id));
   const selectedFiles = selectedItems.filter((item) => item.itemType === "file");
   const selectedFolders = selectedItems.filter((item) => item.itemType === "folder");
-  const allVisibleFilesSelected = children.length > 0 && children.every((item) => selectedFileIds.has(item.id));
+  const allVisibleFilesSelected = visibleChildren.length > 0 && visibleChildren.every((item) => selectedFileIds.has(item.id));
   const moveTargets = [
     ...(parentFolder ? [{ id: parentFolder.id, name: `Parent: ${parentFolder.name}` }] : []),
     ...children.filter((item) => item.itemType === "folder").map((item) => ({ id: item.id, name: item.name }))
   ];
   const canViewTelemetry = user?.role === "ADMIN" || user?.role === "OPERATIONS";
   const canManageTelemetryRetention = canViewTelemetry;
-  const sortedChildren = [...children].sort((left, right) => {
+  const driveEmptyMessage = loading || uploading || searchingDrive
+    ? "Loading..."
+    : isDriveSearchActive
+      ? "No matching files"
+      : "No files or folders";
+  const sortedChildren = [...visibleChildren].sort((left, right) => {
     const leftValue = driveSortKey === "name"
       ? left.name.toLowerCase()
       : driveSortKey === "size"
@@ -3214,8 +3366,8 @@ export default function Home() {
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
               >
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-2">
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
                 <button
                   onClick={() => parentFolder && openFolder(parentFolder)}
                   disabled={!parentFolder || loading}
@@ -3239,7 +3391,48 @@ export default function Home() {
                 </nav>
               </div>
 
+              <form onSubmit={submitDriveSearch} className="flex min-w-[320px] flex-1 items-center gap-2">
+                <div className="relative min-w-0 flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={driveSearchQuery}
+                    onChange={(event) => setDriveSearchQuery(event.target.value)}
+                    placeholder="Search files in this folder tree"
+                    disabled={!currentFolder || loading || uploading || searchingDrive}
+                    className="h-10 w-full rounded-md border border-slate-300 bg-white pl-9 pr-10 text-sm outline-none focus:border-blue-500 disabled:opacity-50"
+                  />
+                  {driveSearchQuery ? (
+                    <button
+                      type="button"
+                      onClick={() => void clearDriveSearch()}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:text-slate-700"
+                      aria-label="Clear search"
+                    >
+                      <XCircle className="h-4 w-4" />
+                    </button>
+                  ) : null}
+                </div>
+                <button
+                  type="submit"
+                  disabled={!currentFolder || loading || uploading || searchingDrive || !driveSearchQuery.trim()}
+                  className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 font-semibold disabled:opacity-50"
+                >
+                  <Search className="h-4 w-4" />
+                  Search
+                </button>
+              </form>
+
               <div className="flex items-center gap-2">
+                {isDriveSearchActive ? (
+                  <button
+                    type="button"
+                    onClick={() => void clearDriveSearch()}
+                    disabled={loading || uploading || searchingDrive}
+                    className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 font-semibold disabled:opacity-50"
+                  >
+                    Clear search
+                  </button>
+                ) : null}
                 <div className="inline-flex rounded-md border border-slate-300 bg-white p-1" aria-label="File view mode">
                   <button
                     type="button"
@@ -3268,7 +3461,7 @@ export default function Home() {
                 </div>
                 <button
                   onClick={refreshCurrentFolder}
-                  disabled={loading || uploading}
+                  disabled={loading || uploading || searchingDrive}
                   className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 bg-white disabled:opacity-50"
                   title="Refresh"
                 >
@@ -3293,7 +3486,7 @@ export default function Home() {
                 />
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={!currentFolder || loading || uploading}
+                  disabled={!currentFolder || loading || uploading || searchingDrive}
                   className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 font-semibold disabled:opacity-50"
                 >
                   <Upload className="h-4 w-4" />
@@ -3301,7 +3494,7 @@ export default function Home() {
                 </button>
                 <button
                   onClick={() => folderInputRef.current?.click()}
-                  disabled={!currentFolder || loading || uploading}
+                  disabled={!currentFolder || loading || uploading || searchingDrive}
                   className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 font-semibold disabled:opacity-50"
                 >
                   <Folder className="h-4 w-4" />
@@ -3309,7 +3502,7 @@ export default function Home() {
                 </button>
                 <button
                   onClick={createFolder}
-                  disabled={!currentFolder || loading || uploading}
+                  disabled={!currentFolder || loading || uploading || searchingDrive}
                   className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-600 px-4 font-semibold text-white disabled:opacity-50"
                 >
                   <Plus className="h-4 w-4" />
@@ -3317,6 +3510,12 @@ export default function Home() {
                 </button>
               </div>
             </div>
+
+            {isDriveSearchActive ? (
+              <div className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                {searchingDrive ? "Searching file names in this folder tree..." : `Showing matches for "${activeDriveSearchQuery}" in this folder tree`}
+              </div>
+            ) : null}
 
             {error ? <p className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-red-700">{error}</p> : null}
 
@@ -3326,6 +3525,16 @@ export default function Home() {
                   <p className="text-sm font-semibold text-slate-700">
                     {pendingUploads.length} file{pendingUploads.length === 1 ? "" : "s"} queued
                   </p>
+                  {uploading ? (
+                    <button
+                      type="button"
+                      onClick={cancelInFlightUpload}
+                      className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 bg-white px-3 text-sm font-semibold text-red-700 hover:bg-red-50"
+                    >
+                      <XCircle className="h-4 w-4" />
+                      Cancel upload
+                    </button>
+                  ) : null}
                 </div>
                 {uploadProgressLabel ? (
                   <p className="mb-2 text-xs font-medium text-slate-500">{uploadProgressLabel}</p>
@@ -3410,14 +3619,14 @@ export default function Home() {
                 <>
                   <div className="hidden grid-cols-[44px_minmax(0,1fr)_120px_160px_auto] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-600 md:grid">
                     <div className="flex items-center justify-center">
-                      <input
-                        type="checkbox"
-                        checked={allVisibleFilesSelected}
-                        onChange={toggleAllFiles}
-                        disabled={children.length === 0}
-                        aria-label="Select all items"
-                        className="h-4 w-4"
-                      />
+                        <input
+                          type="checkbox"
+                          checked={allVisibleFilesSelected}
+                          onChange={toggleAllFiles}
+                          disabled={visibleChildren.length === 0}
+                          aria-label="Select all items"
+                          className="h-4 w-4"
+                        />
                     </div>
                     <div>
                       <button type="button" onClick={() => sortDriveItems("name")} className="inline-flex items-center gap-1 hover:text-blue-700">
@@ -3445,8 +3654,8 @@ export default function Home() {
                     </div>
                     <div>Actions</div>
                   </div>
-                  {children.length === 0 ? (
-                    <div className="px-4 py-12 text-center text-slate-500">{loading || uploading ? "Loading..." : "No files or folders"}</div>
+                  {visibleChildren.length === 0 ? (
+                    <div className="px-4 py-12 text-center text-slate-500">{driveEmptyMessage}</div>
                   ) : (
                     sortedChildren.map((item) => (
                       <div
@@ -3536,8 +3745,8 @@ export default function Home() {
                     ))
                   )}
                 </>
-              ) : children.length === 0 ? (
-                <div className="px-4 py-12 text-center text-slate-500">{loading || uploading ? "Loading..." : "No files or folders"}</div>
+              ) : visibleChildren.length === 0 ? (
+                <div className="px-4 py-12 text-center text-slate-500">{driveEmptyMessage}</div>
               ) : (
                 <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
                   {sortedChildren.map((item) => (

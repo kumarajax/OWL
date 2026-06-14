@@ -13,11 +13,15 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -113,9 +117,24 @@ public class FileService {
             Files.createDirectories(chunkPath.getParent());
             Files.deleteIfExists(chunkPath);
             chunk.transferTo(chunkPath);
+            String storagePool = readUploadStoragePool(chunkPath.getParent());
+            String minioUploadId = readMinioUploadId(chunkPath.getParent());
+            StoredUploadPart storedPart = objectStorageService.storeMultipartUploadPart(
+                    storagePool, minioUploadId, user.id(), uploadId, chunkIndex, chunk);
+            writeUploadStoragePool(chunkPath.getParent(), storedPart.storagePool());
+            writeMinioUploadId(chunkPath.getParent(), storedPart.minioUploadId());
+            writeUploadPart(chunkPath.getParent(), chunkIndex, storedPart);
         } catch (IOException ex) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to store upload chunk", ex);
         }
+    }
+
+    public void cancelChunkedUpload(Jwt jwt, String uploadId) {
+        UserRecord user = provisioningService.ensureUser(jwt);
+        validateUploadId(uploadId);
+        Path uploadDir = uploadDir(user.id(), uploadId);
+        abortMultipartUploadIfPresent(user.id(), uploadDir, uploadId);
+        deleteDirectoryQuietly(uploadDir);
     }
 
     @Transactional
@@ -138,16 +157,34 @@ public class FileService {
         UploadPath uploadPath = parseUploadPath(relativePath, fileName);
         FolderRecord destinationFolder = folderService.resolveOrCreateFolderPath(user, parentFolderId, uploadPath.folderSegments());
         Path uploadDir = uploadDir(user.id(), uploadId);
-        Path assembledFile = uploadDir.resolve("assembled");
         try {
-            assembleChunks(uploadDir, assembledFile, totalChunks, totalSizeBytes);
-            FileRecord existing = findActiveFileByName(currentJdbc(), user.id(), destinationFolder.id(), uploadPath.fileName());
-            if (existing != null) {
-                return overwriteExistingFile(user, existing, uploadPath.fileName(), assembledFile, totalSizeBytes, contentType);
+            List<Path> chunks = validateAndListChunks(uploadDir, totalChunks, totalSizeBytes);
+            String storagePool = readUploadStoragePool(uploadDir);
+            if (storagePool == null || storagePool.isBlank()) {
+                throw badRequest("Upload storage pool is missing");
             }
-            return createNewFile(user, destinationFolder.id(), uploadPath.fileName(), assembledFile, totalSizeBytes, contentType);
+            String minioUploadId = readMinioUploadId(uploadDir);
+            if (minioUploadId == null || minioUploadId.isBlank()) {
+                throw badRequest("MinIO upload id is missing");
+            }
+            List<StoredUploadPart> uploadParts = readUploadParts(uploadDir, storagePool, minioUploadId, totalChunks);
+            String checksumSha256 = checksumChunks(chunks);
+            FileRecord existing = findActiveFileByName(currentJdbc(), user.id(), destinationFolder.id(), uploadPath.fileName());
+            FileRecord uploaded;
+            if (existing != null) {
+                uploaded = overwriteExistingFile(
+                        user, existing, uploadPath.fileName(), storagePool, minioUploadId, uploadId, uploadParts, checksumSha256, totalSizeBytes, contentType);
+            } else {
+                uploaded = createNewFile(
+                        user, destinationFolder.id(), uploadPath.fileName(), storagePool, minioUploadId, uploadId, uploadParts, checksumSha256, totalSizeBytes, contentType);
+            }
+            return uploaded;
         } catch (IOException ex) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to assemble upload", ex);
+            abortMultipartUploadIfPresent(user.id(), uploadDir, uploadId);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to store upload", ex);
+        } catch (ResponseStatusException ex) {
+            abortMultipartUploadIfPresent(user.id(), uploadDir, uploadId);
+            throw ex;
         } finally {
             deleteDirectoryQuietly(uploadDir);
         }
@@ -309,6 +346,44 @@ public class FileService {
         }
     }
 
+    private FileRecord createNewFile(
+            UserRecord user,
+            UUID parentFolderId,
+            String originalName,
+            String storagePool,
+            String minioUploadId,
+            String uploadId,
+            List<StoredUploadPart> uploadParts,
+            String checksumSha256,
+            long sizeBytes,
+            String contentType) {
+        UUID fileId = UUID.randomUUID();
+        StoredFile storedFile;
+        try {
+            storedFile = objectStorageService.completeMultipartUpload(
+                    storagePool, minioUploadId, user.id(), uploadId, uploadParts, checksumSha256, sizeBytes);
+        } catch (IOException ex) {
+            abortMultipartUploadQuietly(storagePool, minioUploadId, user.id(), uploadId);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to store file", ex);
+        }
+
+        try {
+            reserveUserStorage(user, storedFile.sizeBytes());
+            return insertFileRecord(user, parentFolderId, fileId, originalName, contentType, storedFile);
+        } catch (DataIntegrityViolationException ex) {
+            FileRecord existing = findActiveFileByName(currentJdbc(), user.id(), parentFolderId, originalName);
+            if (existing != null) {
+                adjustUserStorage(user, -existing.sizeBytes());
+                return overwriteStoredBytes(user, existing, originalName, contentType, storedFile);
+            }
+            deleteStoredBytesQuietly(storedFile);
+            throw badRequest("A file with this name already exists here");
+        } catch (ResponseStatusException ex) {
+            deleteStoredBytesQuietly(storedFile);
+            throw ex;
+        }
+    }
+
     private FileRecord overwriteExistingFile(UserRecord user, FileRecord existingFile, String originalName, MultipartFile upload) {
         UUID fileId = UUID.randomUUID();
         StoredFile storedFile;
@@ -332,6 +407,35 @@ public class FileService {
         try {
             storedFile = objectStorageService.storeFile(user.id(), fileId, path, sizeBytes, contentType);
         } catch (IOException ex) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to store file", ex);
+        }
+        try {
+            adjustUserStorage(user, storedFile.sizeBytes() - existingFile.sizeBytes());
+            return overwriteStoredBytes(user, existingFile, originalName, contentType, storedFile);
+        } catch (ResponseStatusException ex) {
+            deleteStoredBytesQuietly(storedFile);
+            throw ex;
+        }
+    }
+
+    private FileRecord overwriteExistingFile(
+            UserRecord user,
+            FileRecord existingFile,
+            String originalName,
+            String storagePool,
+            String minioUploadId,
+            String uploadId,
+            List<StoredUploadPart> uploadParts,
+            String checksumSha256,
+            long sizeBytes,
+            String contentType) {
+        UUID fileId = UUID.randomUUID();
+        StoredFile storedFile;
+        try {
+            storedFile = objectStorageService.completeMultipartUpload(
+                    storagePool, minioUploadId, user.id(), uploadId, uploadParts, checksumSha256, sizeBytes);
+        } catch (IOException ex) {
+            abortMultipartUploadQuietly(storagePool, minioUploadId, user.id(), uploadId);
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to store file", ex);
         }
         try {
@@ -772,24 +876,130 @@ public class FileService {
         }
     }
 
-    private void assembleChunks(Path uploadDir, Path assembledFile, int totalChunks, long totalSizeBytes) throws IOException {
+    private List<Path> validateAndListChunks(Path uploadDir, int totalChunks, long totalSizeBytes) throws IOException {
         Files.createDirectories(uploadDir);
-        long assembledBytes = 0;
-        try (OutputStream output = Files.newOutputStream(assembledFile)) {
-            for (int index = 0; index < totalChunks; index += 1) {
-                Path part = uploadDir.resolve(chunkFileName(index));
-                if (!Files.isRegularFile(part)) {
-                    throw badRequest("Missing upload chunk " + index);
-                }
-                assembledBytes += Files.size(part);
-                try (InputStream input = Files.newInputStream(part)) {
-                    input.transferTo(output);
-                }
+        List<Path> chunks = new ArrayList<>();
+        long chunkBytes = 0;
+        for (int index = 0; index < totalChunks; index += 1) {
+            Path part = uploadDir.resolve(chunkFileName(index));
+            if (!Files.isRegularFile(part)) {
+                throw badRequest("Missing upload chunk " + index);
+            }
+            long partSize = Files.size(part);
+            chunkBytes += partSize;
+            chunks.add(part);
+        }
+        if (chunkBytes != totalSizeBytes) {
+            throw badRequest("Upload size mismatch");
+        }
+        return chunks;
+    }
+
+    private String readUploadStoragePool(Path uploadDir) throws IOException {
+        Path poolPath = uploadDir.resolve("storage-pool");
+        if (!Files.isRegularFile(poolPath)) {
+            return null;
+        }
+        String storagePool = Files.readString(poolPath).trim();
+        return storagePool.isBlank() ? null : storagePool;
+    }
+
+    private void writeUploadStoragePool(Path uploadDir, String storagePool) throws IOException {
+        if (storagePool == null || storagePool.isBlank()) {
+            throw new IOException("Upload storage pool is missing");
+        }
+        Files.writeString(uploadDir.resolve("storage-pool"), storagePool);
+    }
+
+    private String readMinioUploadId(Path uploadDir) throws IOException {
+        Path uploadIdPath = uploadDir.resolve("minio-upload-id");
+        if (!Files.isRegularFile(uploadIdPath)) {
+            return null;
+        }
+        String minioUploadId = Files.readString(uploadIdPath).trim();
+        return minioUploadId.isBlank() ? null : minioUploadId;
+    }
+
+    private void writeMinioUploadId(Path uploadDir, String minioUploadId) throws IOException {
+        if (minioUploadId == null || minioUploadId.isBlank()) {
+            throw new IOException("MinIO upload id is missing");
+        }
+        Files.writeString(uploadDir.resolve("minio-upload-id"), minioUploadId);
+    }
+
+    private void writeUploadPart(Path uploadDir, int chunkIndex, StoredUploadPart storedPart) throws IOException {
+        Files.writeString(uploadDir.resolve(uploadPartFileName(chunkIndex)), storedPart.partNumber() + "\n" + storedPart.etag());
+    }
+
+    private void abortMultipartUploadIfPresent(UUID ownerId, Path uploadDir, String uploadId) {
+        String storagePool = null;
+        String minioUploadId = null;
+        try {
+            storagePool = readUploadStoragePool(uploadDir);
+            minioUploadId = readMinioUploadId(uploadDir);
+        } catch (IOException ex) {
+            log.warn("Unable to read chunk upload metadata for cleanup at {}", uploadDir, ex);
+        }
+        abortMultipartUploadQuietly(storagePool, minioUploadId, ownerId, uploadId);
+    }
+
+    private void abortMultipartUploadQuietly(String storagePool, String minioUploadId, UUID ownerId, String uploadId) {
+        if (storagePool == null || storagePool.isBlank() || minioUploadId == null || minioUploadId.isBlank()) {
+            return;
+        }
+        try {
+            objectStorageService.abortMultipartUpload(storagePool, minioUploadId, ownerId, uploadId);
+        } catch (IOException ex) {
+            log.warn("Unable to abort multipart upload {} in pool {}", uploadId, storagePool, ex);
+        }
+    }
+
+    private List<StoredUploadPart> readUploadParts(Path uploadDir, String storagePool, String minioUploadId, int totalChunks) throws IOException {
+        List<StoredUploadPart> uploadParts = new ArrayList<>();
+        for (int index = 0; index < totalChunks; index += 1) {
+            Path partPath = uploadDir.resolve(uploadPartFileName(index));
+            if (!Files.isRegularFile(partPath)) {
+                throw badRequest("Missing stored upload part " + index);
+            }
+            List<String> lines = Files.readAllLines(partPath);
+            if (lines.size() < 2) {
+                throw badRequest("Invalid stored upload part " + index);
+            }
+            int partNumber;
+            try {
+                partNumber = Integer.parseInt(lines.get(0).trim());
+            } catch (NumberFormatException ex) {
+                throw badRequest("Invalid stored upload part " + index);
+            }
+            String etag = lines.get(1).trim();
+            if (etag.isBlank()) {
+                throw badRequest("Invalid stored upload part " + index);
+            }
+            uploadParts.add(new StoredUploadPart(storagePool, minioUploadId, partNumber, etag));
+        }
+        return uploadParts;
+    }
+
+    private String checksumChunks(List<Path> chunks) throws IOException {
+        MessageDigest digest = sha256Digest();
+        for (Path chunk : chunks) {
+            try (InputStream input = new DigestInputStream(Files.newInputStream(chunk), digest)) {
+                input.transferTo(OutputStream.nullOutputStream());
             }
         }
-        if (assembledBytes != totalSizeBytes) {
-            throw badRequest("Assembled upload size does not match expected size");
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private MessageDigest sha256Digest() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 is not available", ex);
         }
+    }
+
+    private String uploadPartFileName(int chunkIndex) {
+        return chunkFileName(chunkIndex) + ".etag";
     }
 
     private Path chunkPath(UUID userId, String uploadId, int chunkIndex) {

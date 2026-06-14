@@ -1,16 +1,21 @@
 package com.owldrive.api;
 
+import com.google.common.collect.HashMultimap;
+import com.google.common.collect.Multimap;
 import io.minio.BucketExistsArgs;
 import io.minio.GetObjectArgs;
 import io.minio.ListObjectsArgs;
 import io.minio.MakeBucketArgs;
+import io.minio.MinioAsyncClient;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
 import io.minio.Result;
 import io.minio.StatObjectArgs;
+import io.minio.UploadPartResponse;
 import io.minio.errors.ErrorResponseException;
 import io.minio.messages.Item;
+import io.minio.messages.Part;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -68,6 +73,87 @@ public class MultiPoolMinioObjectStorageService implements ObjectStorageService 
     @Override
     public StoredFile storeFile(UUID ownerId, UUID fileId, Path path, long sizeBytes, String contentType) throws IOException {
         return storeStream(ownerId, fileId, () -> Files.newInputStream(path), sizeBytes, contentType);
+    }
+
+    @Override
+    public StoredUploadPart storeMultipartUploadPart(
+            String storagePool,
+            String minioUploadId,
+            UUID ownerId,
+            String uploadId,
+            int chunkIndex,
+            MultipartFile chunk) throws IOException {
+        Pool pool = (storagePool == null || storagePool.isBlank()) ? pools.get(0) : requirePool(storagePool);
+        ensureBucket(pool);
+        String storageKey = multipartUploadStorageKey(ownerId, uploadId);
+        try {
+            String activeUploadId = minioUploadId;
+            if (activeUploadId == null || activeUploadId.isBlank()) {
+                activeUploadId = pool.asyncClient
+                        .createMultipartUploadAsync(pool.bucket, null, storageKey, HashMultimap.create(), HashMultimap.create())
+                        .get()
+                        .result()
+                        .uploadId();
+            }
+            try (InputStream input = chunk.getInputStream()) {
+                UploadPartResponse response = pool.asyncClient
+                        .uploadPartAsync(pool.bucket, null, storageKey, input, chunk.getSize(), activeUploadId, chunkIndex + 1, emptyMultimap(), emptyMultimap())
+                        .get();
+                return new StoredUploadPart(pool.name, activeUploadId, response.partNumber(), response.etag());
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while storing upload part", ex);
+        } catch (IOException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IOException("Unable to store upload part", ex);
+        }
+    }
+
+    @Override
+    public StoredFile completeMultipartUpload(
+            String storagePool,
+            String minioUploadId,
+            UUID ownerId,
+            String uploadId,
+            List<StoredUploadPart> parts,
+            String checksumSha256,
+            long sizeBytes) throws IOException {
+        Pool pool = requirePool(storagePool);
+        String storageKey = multipartUploadStorageKey(ownerId, uploadId);
+        Part[] minioParts = parts.stream()
+                .map(part -> new Part(part.partNumber(), part.etag()))
+                .toArray(Part[]::new);
+        try {
+            pool.asyncClient
+                    .completeMultipartUploadAsync(pool.bucket, null, storageKey, minioUploadId, minioParts, emptyMultimap(), emptyMultimap())
+                    .get();
+            return new StoredFile(pool.name, storageKey, checksumSha256, sizeBytes);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while completing upload", ex);
+        } catch (Exception ex) {
+            throw new IOException("Unable to complete multipart upload", ex);
+        }
+    }
+
+    @Override
+    public void abortMultipartUpload(String storagePool, String minioUploadId, UUID ownerId, String uploadId) throws IOException {
+        if (storagePool == null || storagePool.isBlank() || minioUploadId == null || minioUploadId.isBlank()) {
+            return;
+        }
+        Pool pool = requirePool(storagePool);
+        try {
+            pool.asyncClient
+                    .abortMultipartUploadAsync(pool.bucket, null, multipartUploadStorageKey(ownerId, uploadId), minioUploadId, emptyMultimap(), emptyMultimap())
+                    .get();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while aborting upload", ex);
+        } catch (Exception ex) {
+            throw new IOException("Unable to abort multipart upload", ex);
+        }
     }
 
     private StoredFile storeStream(UUID ownerId, UUID fileId, InputStreamSupplier sourceSupplier, long sizeBytes, String contentType) throws IOException {
@@ -233,6 +319,10 @@ public class MultiPoolMinioObjectStorageService implements ObjectStorageService 
         return ownerId + "/" + fileId + "/" + objectName;
     }
 
+    private String multipartUploadStorageKey(UUID ownerId, String uploadId) {
+        return ownerId + "/uploads/" + uploadId + "/original";
+    }
+
     private MessageDigest sha256Digest() {
         try {
             return MessageDigest.getInstance("SHA-256");
@@ -245,16 +335,25 @@ public class MultiPoolMinioObjectStorageService implements ObjectStorageService 
         return new IOException(message, ex);
     }
 
+    private Multimap<String, String> emptyMultimap() {
+        return HashMultimap.create();
+    }
+
     private static final class Pool {
         private final String name;
         private final String bucket;
         private final MinioClient client;
+        private final MinioAsyncClient asyncClient;
         private final AtomicBoolean bucketReady = new AtomicBoolean(false);
 
         private Pool(String name, String endpoint, String accessKey, String secretKey, String bucket) {
             this.name = name;
             this.bucket = bucket;
             this.client = MinioClient.builder()
+                    .endpoint(endpoint)
+                    .credentials(accessKey, secretKey)
+                    .build();
+            this.asyncClient = MinioAsyncClient.builder()
                     .endpoint(endpoint)
                     .credentials(accessKey, secretKey)
                     .build();

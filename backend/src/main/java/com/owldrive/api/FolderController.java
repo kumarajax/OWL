@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -27,6 +28,14 @@ public class FolderController {
     @GetMapping("/{folderId}/children")
     List<DriveItemRecord> children(@AuthenticationPrincipal Jwt jwt, @PathVariable("folderId") UUID folderId) {
         return folderService.children(jwt, folderId);
+    }
+
+    @GetMapping("/{folderId}/search")
+    List<DriveItemRecord> search(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable("folderId") UUID folderId,
+            @RequestParam("name") String name) {
+        return folderService.search(jwt, folderId, name);
     }
 
     @PostMapping
