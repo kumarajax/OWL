@@ -336,10 +336,10 @@ EOF
     done
 
     cat <<'EOF'
-      APP_CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,https://owl-drive.com,https://www.owl-drive.com
-      APP_CORS_ALLOWED_ORIGIN_PATTERNS: https://*.owl-drive.com,http://192.168.*.*:3000,http://10.*.*.*:3000,http://172.*.*.*:3000
-      APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUERS: https://auth.owl-drive.com/realms/owldrive,http://localhost:8080/realms/owldrive,http://127.0.0.1:8080/realms/owldrive
-      APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUER_PATTERNS: http://192.168.*.*:8080/realms/owldrive,http://10.*.*.*:8080/realms/owldrive,http://172.*.*.*:8080/realms/owldrive
+      APP_CORS_ALLOWED_ORIGINS: \${APP_CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,https://owl-drive.com,https://www.owl-drive.com}
+      APP_CORS_ALLOWED_ORIGIN_PATTERNS: \${APP_CORS_ALLOWED_ORIGIN_PATTERNS:-https://*.owl-drive.com,http://192.168.*.*:3000,http://10.*.*.*:3000,http://172.*.*.*:3000}
+      APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUERS: \${APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUERS:-https://auth.owl-drive.com/realms/owldrive,http://localhost:8080/realms/owldrive,http://127.0.0.1:8080/realms/owldrive}
+      APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUER_PATTERNS: \${APP_SECURITY_OAUTH2_JWT_ALLOWED_ISSUER_PATTERNS:-http://192.168.*.*:8080/realms/owldrive,http://10.*.*.*:8080/realms/owldrive,http://172.*.*.*:8080/realms/owldrive}
     ports:
       - "8081:8081"
     depends_on:
@@ -369,14 +369,14 @@ EOF
     build:
       context: ./frontend
       args:
-        NEXT_PUBLIC_API_BASE_URL: https://api.owl-drive.com
-        NEXT_PUBLIC_KEYCLOAK_URL: https://auth.owl-drive.com
+        NEXT_PUBLIC_API_BASE_URL: \${NEXT_PUBLIC_API_BASE_URL:-https://api.owl-drive.com}
+        NEXT_PUBLIC_KEYCLOAK_URL: \${NEXT_PUBLIC_KEYCLOAK_URL:-https://auth.owl-drive.com}
         NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES: \${NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES:-52428800}
         NEXT_PUBLIC_LEGAL_CURRENT_VERSION: \${APP_LEGAL_CURRENT_VERSION:-2026-05-26}
         NEXT_PUBLIC_USER_CREATION_APPROVAL_REQUIRED: \${USER_CREATION_APPROVAL_REQUIRED:-Y}
     environment:
-      NEXT_PUBLIC_API_BASE_URL: https://api.owl-drive.com
-      NEXT_PUBLIC_KEYCLOAK_URL: https://auth.owl-drive.com
+      NEXT_PUBLIC_API_BASE_URL: \${NEXT_PUBLIC_API_BASE_URL:-https://api.owl-drive.com}
+      NEXT_PUBLIC_KEYCLOAK_URL: \${NEXT_PUBLIC_KEYCLOAK_URL:-https://auth.owl-drive.com}
       NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES: \${NEXT_PUBLIC_UPLOAD_CHUNK_SIZE_BYTES:-52428800}
       NEXT_PUBLIC_LEGAL_CURRENT_VERSION: \${APP_LEGAL_CURRENT_VERSION:-2026-05-26}
       NEXT_PUBLIC_USER_CREATION_APPROVAL_REQUIRED: \${USER_CREATION_APPROVAL_REQUIRED:-Y}
