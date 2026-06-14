@@ -310,6 +310,24 @@ function generateCaptchaCode() {
   return Array.from(bytes, (value) => alphabet[value % alphabet.length]).join("");
 }
 
+function generateClientUuid() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  const cryptoProvider = globalThis.crypto ?? window.crypto;
+  if (cryptoProvider?.getRandomValues) {
+    const bytes = cryptoProvider.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"));
+    return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+    const value = Math.floor(Math.random() * 16);
+    return (char === "x" ? value : (value & 0x3) | 0x8).toString(16);
+  });
+}
+
 async function readJson<T>(response: Response): Promise<T> {
   if (response.ok) return response.json();
   if (response.status === 401) throw new AuthExpiredError();
@@ -1803,7 +1821,7 @@ export default function Home() {
 
   async function uploadChunkedFile(file: File, fileCount: number, fileIndex: number) {
     if (!bearerHeaders || !currentFolder) return;
-    const uploadId = crypto.randomUUID();
+    const uploadId = generateClientUuid();
     activeChunkedUploadIdRef.current = uploadId;
     const totalChunks = Math.ceil(file.size / uploadChunkSizeBytes);
     for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
@@ -3391,7 +3409,7 @@ export default function Home() {
                 </nav>
               </div>
 
-              <form onSubmit={submitDriveSearch} className="flex min-w-[320px] flex-1 items-center gap-2">
+              <form onSubmit={submitDriveSearch} className="flex min-w-[320px] flex-1 items-center">
                 <div className="relative min-w-0 flex-1">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <input
@@ -3412,14 +3430,6 @@ export default function Home() {
                     </button>
                   ) : null}
                 </div>
-                <button
-                  type="submit"
-                  disabled={!currentFolder || loading || uploading || searchingDrive || !driveSearchQuery.trim()}
-                  className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 font-semibold disabled:opacity-50"
-                >
-                  <Search className="h-4 w-4" />
-                  Search
-                </button>
               </form>
 
               <div className="flex items-center gap-2">
