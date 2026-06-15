@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   ArrowDown,
   ArrowUp,
+  ChevronDown,
   ChevronRight,
   Copy,
   Download,
@@ -567,6 +568,7 @@ export default function Home() {
   const [legalAcceptance, setLegalAcceptance] = useState<LegalAcceptance | null>(null);
   const [acceptingLegal, setAcceptingLegal] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [rootFolder, setRootFolder] = useState<FolderRecord | null>(null);
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
   const [currentFolder, setCurrentFolder] = useState<FolderRecord | null>(null);
@@ -642,6 +644,7 @@ export default function Home() {
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const shareLinkInputRef = useRef<HTMLInputElement | null>(null);
   const mediaViewerVideoRef = useRef<HTMLVideoElement | null>(null);
   const mediaViewerCacheRef = useRef<Map<string, string>>(new Map());
@@ -676,6 +679,30 @@ export default function Home() {
     const storedToken = localStorage.getItem("owl_access_token");
     if (storedToken) setToken(storedToken);
   }, []);
+
+  useEffect(() => {
+    if (!accountMenuOpen) return;
+
+    function closeAccountMenu(event: MouseEvent) {
+      if (accountMenuRef.current?.contains(event.target as Node)) return;
+      setAccountMenuOpen(false);
+    }
+
+    function closeAccountMenuOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setAccountMenuOpen(false);
+    }
+
+    document.addEventListener("mousedown", closeAccountMenu);
+    document.addEventListener("keydown", closeAccountMenuOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeAccountMenu);
+      document.removeEventListener("keydown", closeAccountMenuOnEscape);
+    };
+  }, [accountMenuOpen]);
+
+  useEffect(() => {
+    if (!token) setAccountMenuOpen(false);
+  }, [token]);
 
   useEffect(() => {
     async function loadRegistrationStatus() {
@@ -2325,14 +2352,70 @@ export default function Home() {
           <div className="text-xl font-semibold">OWL Drive</div>
         </div>
         {token ? (
-          <div className="flex items-center gap-3">
-            <div className="hidden text-sm text-slate-600 sm:block" title={user?.displayName ?? user?.email ?? user?.username ?? ""}>
-              {accountName(user)}
-            </div>
-            <button onClick={logout} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 font-semibold">
-              <LogOut className="h-4 w-4" />
-              Log out
+          <div ref={accountMenuRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setAccountMenuOpen((current) => !current)}
+              className="inline-flex h-10 max-w-[220px] items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+              aria-haspopup="menu"
+              aria-expanded={accountMenuOpen}
+            >
+              <UserCircle className="h-4 w-4 shrink-0 text-slate-500" />
+              <span className="truncate" title={user?.displayName ?? user?.email ?? user?.username ?? ""}>
+                {accountName(user)}
+              </span>
+              <ChevronDown className={`h-4 w-4 shrink-0 text-slate-500 ${accountMenuOpen ? "rotate-180" : ""}`} />
             </button>
+            {accountMenuOpen ? (
+              <div
+                className="absolute right-0 z-40 mt-2 w-56 overflow-hidden rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg"
+                role="menu"
+              >
+                {!accountDeactivated ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAccountMenuOpen(false);
+                        openPasswordDialog();
+                      }}
+                      disabled={loading || uploading}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      role="menuitem"
+                    >
+                      <KeyRound className="h-4 w-4" />
+                      Reset password
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAccountMenuOpen(false);
+                        openDeactivateAccountDialog();
+                      }}
+                      disabled={loading || uploading}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      role="menuitem"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Deactivate account
+                    </button>
+                  </>
+                ) : null}
+                <div className="my-1 border-t border-slate-100" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccountMenuOpen(false);
+                    logout();
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left font-medium text-slate-700 hover:bg-slate-50"
+                  role="menuitem"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Log out
+                </button>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </header>
@@ -2958,22 +3041,6 @@ export default function Home() {
               <div className="mt-1 text-slate-600">{accountDeactivated ? "Account deactivated" : formatStorage(storageInfo)}</div>
             </div>
             <div className="mt-5 border-t border-slate-200 pt-5 text-sm">
-              <div className="flex min-w-0 items-center gap-2 text-slate-700">
-                <UserCircle className="h-4 w-4 shrink-0" />
-                <span className="truncate font-medium" title={user?.displayName ?? user?.email ?? user?.username ?? ""}>
-                  {accountName(user)}
-                </span>
-              </div>
-              {canViewTelemetry ? (
-                <button
-                  type="button"
-                  onClick={loadTelemetry}
-                  className="inline-flex h-10 shrink-0 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 font-semibold text-slate-800 disabled:opacity-50"
-                >
-                  <Activity className="h-4 w-4" />
-                  Telemetry
-                </button>
-              ) : null}
               {accountDeactivated ? (
                 <button
                   type="button"
@@ -2984,28 +3051,7 @@ export default function Home() {
                   <RefreshCw className={`h-4 w-4 ${activating ? "animate-spin" : ""}`} />
                   Activate account
                 </button>
-              ) : (
-                <div className="mt-3 space-y-2">
-                  <button
-                    type="button"
-                    onClick={openPasswordDialog}
-                    disabled={loading || uploading}
-                    className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    <KeyRound className="h-4 w-4" />
-                    Reset password
-                  </button>
-                  <button
-                    type="button"
-                    onClick={openDeactivateAccountDialog}
-                    disabled={loading || uploading}
-                    className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border border-red-200 bg-white px-3 font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    Deactivate account
-                  </button>
-                </div>
-              )}
+              ) : null}
             </div>
           </aside>
 
@@ -3027,28 +3073,7 @@ export default function Home() {
                   <RefreshCw className={`h-4 w-4 ${activating ? "animate-spin" : ""}`} />
                   Activate
                 </button>
-              ) : (
-                <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={openPasswordDialog}
-                    disabled={loading || uploading}
-                    className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-3 font-semibold disabled:opacity-50"
-                    title="Reset password"
-                  >
-                    <KeyRound className="h-4 w-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={openDeactivateAccountDialog}
-                    disabled={loading || uploading}
-                    className="inline-flex h-10 shrink-0 items-center gap-2 rounded-md border border-red-200 bg-white px-3 font-semibold text-red-700 disabled:opacity-50"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    Deactivate
-                  </button>
-                </div>
-              )}
+              ) : null}
             </div>
 
             {activeView === "telemetry" ? (
