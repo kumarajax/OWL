@@ -2371,6 +2371,23 @@ export default function Home() {
                 className="absolute right-0 z-40 mt-2 w-56 overflow-hidden rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg"
                 role="menu"
               >
+                {canViewTelemetry ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAccountMenuOpen(false);
+                        void loadTelemetry();
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left font-medium text-slate-700 hover:bg-slate-50"
+                      role="menuitem"
+                    >
+                      <Activity className="h-4 w-4" />
+                      Telemetry
+                    </button>
+                    <div className="my-1 border-t border-slate-100" />
+                  </>
+                ) : null}
                 {!accountDeactivated ? (
                   <>
                     <button
